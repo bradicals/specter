@@ -1,0 +1,14 @@
+# .NET
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# WebView2 / Edge runtime data
+**/*.WebView2/
+
+# IDE / editor (optional)
+.claude/
+.vs/

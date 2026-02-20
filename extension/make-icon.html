@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<body>
+<canvas id="c" width="128" height="128"></canvas>
+<a id="dl" download="icon.png">Download icon.png</a>
+<script>
+  var cv = document.getElementById('c');
+  var ctx = cv.getContext('2d');
+  ctx.fillStyle = '#0e1018';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, 128, 128, 24);
+  ctx.fill();
+  ctx.fillStyle = '#7b8fff';
+  ctx.font = 'bold 80px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('S', 64, 68);
+  document.getElementById('dl').href = cv.toDataURL('image/png');
+  document.getElementById('dl').click();
+</script>
+</body>
+</html>
