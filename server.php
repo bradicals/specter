@@ -1692,7 +1692,14 @@ function showCardModal(card) {
   titleIn.placeholder = 'Title';
 
   // Description — HTML view (view mode) + textarea (edit mode)
-  const savedDescH = localStorage.getItem('specter-desc-height') || '140px';
+  const _layoutKey = 'specter-layout-' + (card.ticketId || card.id);
+  const _layout    = JSON.parse(localStorage.getItem(_layoutKey) || '{}');
+  const _saveLayout = (patch) => {
+    const current = JSON.parse(localStorage.getItem(_layoutKey) || '{}');
+    localStorage.setItem(_layoutKey, JSON.stringify(Object.assign(current, patch)));
+  };
+
+  const savedDescH = _layout.descHeight || '140px';
 
   const descView = document.createElement('div');
   descView.className = 'desc-html-view';
@@ -1743,7 +1750,7 @@ function showCardModal(card) {
   }
   // Save height on resize
   const descViewObs = new ResizeObserver(() => {
-    if (descView.style.height) localStorage.setItem('specter-desc-height', descView.style.height);
+    if (descView.style.height) _saveLayout({ descHeight: descView.style.height });
   });
   descViewObs.observe(descView);
 
@@ -1753,7 +1760,7 @@ function showCardModal(card) {
   descIn.style.height = savedDescH;
   descIn.style.display = 'none';
   descIn.addEventListener('mouseup', () => {
-    if (descIn.style.height) localStorage.setItem('specter-desc-height', descIn.style.height);
+    if (descIn.style.height) _saveLayout({ descHeight: descIn.style.height });
   });
 
   // Notes
@@ -1761,10 +1768,10 @@ function showCardModal(card) {
   notesIn.value = card.notes || '';
   notesIn.placeholder = 'Notes…';
   notesIn.readOnly = true;
-  const savedNotesH = localStorage.getItem('specter-notes-height');
+  const savedNotesH = _layout.notesHeight;
   if (savedNotesH) notesIn.style.height = savedNotesH;
   notesIn.addEventListener('mouseup', () => {
-    if (notesIn.style.height) localStorage.setItem('specter-notes-height', notesIn.style.height);
+    if (notesIn.style.height) _saveLayout({ notesHeight: notesIn.style.height });
   });
 
   // URL field + open link button
