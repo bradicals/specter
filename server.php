@@ -1014,7 +1014,22 @@ function showCardModal(card) {
   if (card.descriptionHtml) {
     const tmp = document.createElement('div');
     tmp.innerHTML = card.descriptionHtml;
-    // Sanitize inline styles: strip visual overrides but keep layout/whitespace props
+    // Sanitize: remove dangerous elements and attributes
+    tmp.querySelectorAll('script,style,iframe,object,embed,form,meta,link,base').forEach(el => el.remove());
+    tmp.querySelectorAll('*').forEach(el => {
+      // Strip event handler attributes (on*)
+      for (const attr of [...el.attributes]) {
+        if (attr.name.startsWith('on')) el.removeAttribute(attr.name);
+      }
+      // Strip dangerous href/src schemes
+      ['href', 'src', 'action', 'formaction', 'xlink:href'].forEach(a => {
+        const v = (el.getAttribute(a) || '').trim().toLowerCase().replace(/\s+/g, '');
+        if (v.startsWith('javascript:') || v.startsWith('vbscript:') || (v.startsWith('data:') && !v.startsWith('data:image/'))) {
+          el.removeAttribute(a);
+        }
+      });
+    });
+    // Clean inline styles: strip visual overrides but keep layout/whitespace props
     tmp.querySelectorAll('*').forEach(el => {
       const s = el.getAttribute('style');
       if (s) {
