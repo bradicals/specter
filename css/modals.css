@@ -138,7 +138,7 @@
   background: rgba(10,12,22,0.3);
   border: 1px solid var(--border);
   border-radius: 5px;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   resize: vertical;
 }
 .desc-html-view h1, .desc-html-view h2,
@@ -154,7 +154,7 @@
 .desc-html-view strong, .desc-html-view b { color: var(--text); font-weight: 600; }
 .desc-html-view em, .desc-html-view i { font-style: italic; color: var(--text-dim); }
 .desc-html-view code {
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 11px; background: rgba(123,143,255,0.12);
   border: 1px solid rgba(123,143,255,0.2);
   border-radius: 3px; padding: 1px 4px;
@@ -163,7 +163,7 @@
   background: rgba(0,0,0,0.3); border-radius: 4px;
   padding: 8px; overflow-x: auto; font-size: 11px; margin: 6px 0;
   white-space: pre-wrap; word-break: break-all;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: 'Cascadia Code', Consolas, monospace;
 }
 .desc-html-view pre code { background: none; border: none; padding: 0; }
 .desc-html-view blockquote {

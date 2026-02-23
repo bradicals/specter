@@ -46,6 +46,13 @@ function slugify(string $label): string {
     return $slug ?: 'col' . substr(md5($label), 0, 6);
 }
 
+function validDate(mixed $val): string {
+    if (!is_string($val) || $val === '') return '';
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $val)) return '';
+    $d = \DateTime::createFromFormat('Y-m-d', $val);
+    return ($d && $d->format('Y-m-d') === $val) ? $val : '';
+}
+
 function jsonOut(mixed $data, int $status = 200): void {
     http_response_code($status);
     header('Content-Type: application/json');
@@ -113,7 +120,7 @@ if ($method === 'POST' && $uri === '/api/cards') {
         'url'             => $body['url']             ?? '',
         'testingUrl'      => $body['testingUrl']      ?? '',
         'priority'        => $body['priority']        ?? 'medium',
-        'dueDate'         => $body['dueDate']         ?? '',
+        'dueDate'         => validDate($body['dueDate'] ?? ''),
         'column'          => $body['column']          ?? ($data['columns'][0]['id'] ?? 'todo'),
         'attachments'     => $body['attachments']     ?? [],
         'links'           => $body['links']           ?? [],
@@ -129,6 +136,7 @@ if ($method === 'POST' && $uri === '/api/cards') {
 if ($method === 'PATCH' && preg_match('#^/api/cards/([^/]+)$#', $uri, $m)) {
     $id   = $m[1];
     $body = bodyJson();
+    if (array_key_exists('dueDate', $body)) $body['dueDate'] = validDate($body['dueDate'] ?? '');
     $data = readData();
     $found = null;
     foreach ($data['cards'] as &$card) {
@@ -234,7 +242,7 @@ if ($method === 'POST' && $uri === '/api/import') {
         'url'             => $body['url']             ?? '',
         'testingUrl'      => $body['testingUrl']      ?? '',
         'priority'        => $body['priority']        ?? 'medium',
-        'dueDate'         => $body['dueDate']         ?? '',
+        'dueDate'         => validDate($body['dueDate'] ?? ''),
         'column'          => $data['columns'][0]['id'] ?? 'todo',
         'attachments'     => $body['attachments']     ?? [],
         'links'           => $body['links']           ?? [],
@@ -253,6 +261,8 @@ if ($method === 'POST' && $uri === '/api/reorder') {
     $cardIds = $body['cardIds'] ?? [];
     if (!$column || !is_array($cardIds)) { jsonOut(['error' => 'column and cardIds required'], 400); exit; }
     $data = readData();
+    $validCols = array_column($data['columns'], 'id');
+    if (!in_array($column, $validCols, true)) { jsonOut(['error' => 'unknown column'], 400); exit; }
     // Separate cards in target column from others
     $inCol  = [];
     $others = [];

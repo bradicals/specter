@@ -49,7 +49,7 @@
 /* Body */
 body.theme-glass {
   background: transparent !important;
-  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-family: Inter, 'Segoe UI', system-ui, sans-serif;
   color: #e2e8f0;
 }
 
@@ -64,7 +64,7 @@ body.theme-glass #titlebar {
 body.theme-glass #titlebar .ghost-title {
   color: #fff;
   text-shadow: none;
-  font-family: 'Inter', sans-serif;
+  font-family: Inter, sans-serif;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -122,7 +122,7 @@ body.theme-glass .col-header {
 }
 body.theme-glass .col-title {
   color: #e2e8f0;
-  font-family: 'Inter', sans-serif;
+  font-family: Inter, sans-serif;
   font-weight: 600;
   font-size: 13px;
   letter-spacing: 0.02em;
@@ -250,7 +250,7 @@ body.theme-glass .card-title {
   color: #f1f5f9;
   font-size: 13px;
   font-weight: 600;
-  font-family: 'Inter', sans-serif;
+  font-family: Inter, sans-serif;
   line-height: 1.4;
 }
 body.theme-glass .card-notes {
@@ -320,7 +320,7 @@ body.theme-glass .modal {
 }
 body.theme-glass .modal-title {
   color: #fff;
-  font-family: 'Inter', sans-serif;
+  font-family: Inter, sans-serif;
   font-weight: 700;
   font-size: 14px;
   letter-spacing: 0.01em;
@@ -343,7 +343,7 @@ body.theme-glass .modal select {
   border: 1px solid rgba(var(--color-primary-rgb), 0.15);
   border-radius: 8px;
   color: #e2e8f0;
-  font-family: 'Inter', sans-serif;
+  font-family: Inter, sans-serif;
 }
 body.theme-glass .modal input:focus,
 body.theme-glass .modal textarea:focus,
@@ -361,7 +361,7 @@ body.theme-glass .btn-save {
   font-weight: 700;
   border-radius: 8px;
   padding: 8px 16px;
-  font-family: 'Inter', sans-serif;
+  font-family: Inter, sans-serif;
   transition: all 0.2s ease;
   box-shadow: 0 4px 12px rgba(var(--color-primary-rgb), 0.3);
 }
@@ -373,7 +373,7 @@ body.theme-glass .btn-cancel {
   border-color: rgba(var(--color-primary-rgb), 0.2);
   color: #94a3b8;
   border-radius: 8px;
-  font-family: 'Inter', sans-serif;
+  font-family: Inter, sans-serif;
 }
 body.theme-glass .btn-cancel:hover {
   border-color: rgba(var(--color-primary-rgb), 0.4);
@@ -385,7 +385,7 @@ body.theme-glass .btn-danger {
   border: 1px solid rgba(239, 68, 68, 0.25);
   color: #f87171;
   border-radius: 8px;
-  font-family: 'Inter', sans-serif;
+  font-family: Inter, sans-serif;
 }
 body.theme-glass .btn-danger:hover {
   background: rgba(239, 68, 68, 0.2);
@@ -395,7 +395,7 @@ body.theme-glass .btn-edit {
   border: 1px solid rgba(var(--color-primary-rgb), 0.25);
   color: rgb(var(--color-primary-rgb));
   border-radius: 6px;
-  font-family: 'Inter', sans-serif;
+  font-family: Inter, sans-serif;
 }
 body.theme-glass .btn-edit:hover {
   background: rgba(var(--color-primary-rgb), 0.2);
@@ -421,7 +421,7 @@ body.theme-glass .confirm-modal {
 }
 body.theme-glass .confirm-msg {
   color: #e2e8f0;
-  font-family: 'Inter', sans-serif;
+  font-family: Inter, sans-serif;
 }
 
 /* Description HTML view */

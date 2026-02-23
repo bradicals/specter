@@ -25,7 +25,7 @@
   margin-bottom: 4px;
 }
 .ticket-id {
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 10px;
   background: rgba(123,143,255,0.12);
   color: var(--accent);
@@ -88,14 +88,14 @@
   font-weight: 500;
   color: var(--text);
   line-height: 1.35;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .card-notes {
   font-size: 11px;
   color: var(--text-dim);
   margin-top: 4px;
   line-height: 1.4;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* ── Add card form ── */
