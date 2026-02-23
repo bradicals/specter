@@ -1,0 +1,75 @@
+/* ── Reset & Root Variables ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:         rgba(14, 16, 24, 0.92);
+  --surface:    rgba(22, 26, 40, 0.85);
+  --border:     rgba(120, 130, 200, 0.18);
+  --glow:       rgba(100, 120, 255, 0.12);
+  --glow-hover: rgba(100, 120, 255, 0.22);
+  --text:       #c8cde8;
+  --text-dim:   #6b7094;
+  --accent:     #7b8fff;
+  --high:       #ff5f72;
+  --med:        #ffb347;
+  --low:        #5bc8fa;
+  --add-bg:     rgba(30, 35, 55, 0.7);
+  --outer-glow: 0 4px 24px rgba(0,0,0,0.28),
+                0 0 0 1px rgba(123,143,255,0.18);
+
+  /* Color scheme variables (used by glass theme) */
+  --color-primary: #3b2bee;
+  --color-primary-rgb: 59, 43, 238;
+  --color-bg-dark: #121022;
+
+  /* Glass slider defaults */
+  --glass-col-opacity: 0.72;
+  --glass-card-opacity: 0.65;
+  --glass-blur: 24;
+  --glass-bg-intensity: 1;
+}
+
+:root[data-color-scheme="orange"] {
+  --color-primary: #ec5b13;
+  --color-primary-rgb: 236, 91, 19;
+  --color-bg-dark: #1a1310;
+}
+
+html {
+  width: 100%; height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+body {
+  width: 100%; height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ── Resize handles ── */
+.rsz {
+  position: fixed; z-index: 999;
+}
+.rsz-n  { top:0;    left:6px;   right:6px;  height:5px; cursor:n-resize; }
+.rsz-s  { bottom:0; left:6px;   right:6px;  height:5px; cursor:s-resize; }
+.rsz-w  { left:0;   top:6px;    bottom:6px; width:5px;  cursor:w-resize; }
+.rsz-e  { right:0;  top:6px;    bottom:6px; width:5px;  cursor:e-resize; }
+.rsz-nw { top:0;    left:0;     width:10px; height:10px; cursor:nw-resize; }
+.rsz-ne { top:0;    right:0;    width:10px; height:10px; cursor:ne-resize; }
+.rsz-sw { bottom:0; left:0;     width:10px; height:10px; cursor:sw-resize; }
+.rsz-se { bottom:0; right:0;    width:10px; height:10px; cursor:se-resize; }
+body.is-stashed .rsz { display: none; }
+body.is-stashed #app { display: none; }
+body.is-stashed { background: transparent !important; }
+
+/* ── Drop placeholder ── */
+.drop-placeholder {
+  height: 52px;
+  border: 1px dashed rgba(123,143,255,0.3);
+  border-radius: 7px;
+  background: rgba(123,143,255,0.04);
+}

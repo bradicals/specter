@@ -1,0 +1,170 @@
+/* ── Card ── */
+.card {
+  background: rgba(18, 22, 38, 0.8);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 9px;
+  cursor: grab;
+  transition: box-shadow 0.15s, transform 0.1s;
+  position: relative;
+  border-left-width: 3px;
+}
+.card:hover {
+  box-shadow: 0 0 14px var(--glow);
+  transform: translateY(-1px);
+}
+.card.dragging { opacity: 0.45; cursor: grabbing; }
+.card[data-priority="high"]   { border-left-color: var(--high); }
+.card[data-priority="medium"] { border-left-color: var(--med); }
+.card[data-priority="low"]    { border-left-color: var(--low); }
+
+.card-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.ticket-id {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 10px;
+  background: rgba(123,143,255,0.12);
+  color: var(--accent);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid rgba(123,143,255,0.2);
+  flex-shrink: 0;
+}
+.pri-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.pri-badge.high   { background: rgba(255,95,114,0.15); color: var(--high); }
+.pri-badge.medium { background: rgba(255,179,71,0.15); color: var(--med); }
+.pri-badge.low    { background: rgba(91,200,250,0.15); color: var(--low); }
+.due-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+.due-badge.soon {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.3);
+}
+.due-badge.overdue {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.card-del {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  padding: 0 2px;
+}
+.card:hover .card-del { opacity: 1; }
+.card-del:hover { color: var(--high); }
+
+.card-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.card-notes {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* ── Add card form ── */
+.add-card-btn {
+  margin: 4px 8px 8px;
+  width: calc(100% - 16px);
+  background: transparent;
+  border: 1px dashed rgba(120,130,200,0.22);
+  border-radius: 6px;
+  color: var(--text-dim);
+  padding: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.add-card-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(123,143,255,0.06);
+}
+
+.add-card-form {
+  margin: 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.add-card-form input,
+.add-card-form textarea,
+.add-card-form select {
+  background: rgba(10,12,22,0.6);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  padding: 5px 7px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+.add-card-form input:focus,
+.add-card-form textarea:focus,
+.add-card-form select:focus { border-color: var(--accent); }
+.add-card-form textarea { resize: vertical; min-height: 46px; }
+.add-card-form select option { background: #141828; }
+.form-row { display: flex; gap: 5px; }
+.form-btns { display: flex; gap: 5px; }
+.btn-save {
+  flex: 1;
+  background: rgba(123,143,255,0.15);
+  border: 1px solid rgba(123,143,255,0.3);
+  border-radius: 5px;
+  color: var(--accent);
+  padding: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.15s;
+}
+.btn-save:hover { background: rgba(123,143,255,0.28); }
+.btn-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-dim);
+  padding: 5px 9px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: border-color 0.15s;
+}
+.btn-cancel:hover { border-color: var(--text-dim); }

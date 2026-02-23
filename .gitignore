@@ -12,3 +12,6 @@
 # IDE / editor (optional)
 .claude/
 .vs/
+
+# User data
+data/kanban.json
