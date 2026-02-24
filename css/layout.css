@@ -10,13 +10,98 @@
   flex-shrink: 0;
 }
 #titlebar .ghost-title {
-  flex: 1;
+  flex: 0 0 auto;
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--accent);
   text-shadow: 0 0 12px rgba(123,143,255,0.5);
 }
+
+/* ── Board tabs ── */
+#board-tabs {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  scrollbar-width: none;
+}
+#board-tabs::-webkit-scrollbar { display: none; }
+
+.board-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  padding: 2px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  height: 24px;
+  line-height: 1;
+  font-family: inherit;
+}
+.board-tab:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
+}
+.board-tab.active {
+  background: rgba(123,143,255,0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.board-tab .tab-label {
+  writing-mode: horizontal-tb;
+  transform: none;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: none;
+  opacity: 1;
+}
+.board-tab .tab-close {
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  cursor: pointer;
+  margin-left: 2px;
+}
+.board-tab:hover .tab-close { opacity: 0.6; }
+.board-tab .tab-close:hover { opacity: 1; color: var(--high); }
+
+#add-board-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, color 0.15s;
+  padding: 0;
+  line-height: 1;
+  font-family: inherit;
+}
+#add-board-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 #titlebar .win-btns {
   display: flex;
   gap: 4px;
@@ -34,6 +119,72 @@
 }
 #titlebar .win-btns button:hover { background: var(--glow-hover); color: var(--text); }
 #titlebar .win-btns button.close-btn:hover { background: rgba(255,80,80,0.25); color: #ff5f72; }
+
+/* ── Search overlay ── */
+#search-overlay {
+  position: absolute;
+  top: 44px;
+  right: 12px;
+  z-index: 800;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+  transition: opacity 0.15s, transform 0.15s;
+}
+#search-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-6px);
+}
+#search-overlay .search-icon {
+  font-size: 12px;
+  opacity: 0.5;
+  line-height: 1;
+}
+#search-input {
+  width: 200px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 8px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+#search-input::placeholder {
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+#search-input:focus {
+  border-color: var(--accent);
+}
+#search-clear {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, color 0.15s;
+}
+#search-clear.visible {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+#search-clear:hover {
+  color: var(--text);
+  opacity: 1;
+}
 
 /* ── Board layout ── */
 #app {
@@ -227,4 +378,43 @@
   border-color: var(--accent);
   color: var(--accent);
   background: rgba(123,143,255,0.08);
+}
+
+/* ── Context menu ── */
+.ctx-menu {
+  position: fixed;
+  z-index: 9000;
+  min-width: 160px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  font-family: inherit;
+}
+.ctx-menu-header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 10px 4px;
+}
+.ctx-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.ctx-menu-item:hover {
+  background: rgba(123,143,255,0.15);
+  color: var(--accent);
 }
