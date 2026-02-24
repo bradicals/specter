@@ -483,17 +483,20 @@ body.theme-glass .confirm-msg {
   font-family: Inter, sans-serif;
 }
 
-/* Description HTML view */
-body.theme-glass .desc-html-view {
+/* Description / Notes HTML view */
+body.theme-glass .desc-html-view,
+body.theme-glass .notes-html-view {
   background: rgba(var(--color-primary-rgb), 0.05);
   border: 1px solid rgba(var(--color-primary-rgb), 0.1);
   border-radius: 8px;
   color: #cbd5e1;
 }
-body.theme-glass .desc-html-view a {
+body.theme-glass .desc-html-view a,
+body.theme-glass .notes-html-view a {
   color: rgb(var(--color-primary-rgb));
 }
-body.theme-glass .desc-html-view code {
+body.theme-glass .desc-html-view code,
+body.theme-glass .notes-html-view code {
   background: rgba(var(--color-primary-rgb), 0.12);
   border-color: rgba(var(--color-primary-rgb), 0.2);
   color: rgb(var(--color-primary-rgb));
@@ -619,3 +622,34 @@ body.theme-glass .card-link {
 :root[data-color-scheme="orange"] body.theme-glass .card[data-priority="medium"] {
   border-left-color: #38bdf8;
 }
+
+/* ── Toast glass overrides ── */
+body.theme-glass .toast {
+  background: rgba(26, 24, 46, 0.85);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+body.theme-glass .toast.warning {
+  border-color: rgba(251, 191, 36, 0.25);
+  background: rgba(251, 191, 36, 0.06);
+}
+body.theme-glass .toast.danger {
+  border-color: rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.06);
+}
+body.theme-glass .toast-close {
+  color: #64748b;
+}
+body.theme-glass .toast-close:hover {
+  color: #e2e8f0;
+}
+
+/* ── Due-today badge glass override ── */
+body.theme-glass .due-badge.today {
+  background: rgba(249, 115, 22, 0.15);
+  color: #f97316;
+  border-color: rgba(249, 115, 22, 0.35);
+}
+
