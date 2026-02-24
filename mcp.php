@@ -76,6 +76,13 @@ function uuid4(): string {
     return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
 }
 
+function validDate(mixed $val): string {
+    if (!is_string($val) || $val === '') return '';
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $val)) return '';
+    $d = \DateTime::createFromFormat('Y-m-d', $val);
+    return ($d && $d->format('Y-m-d') === $val) ? $val : '';
+}
+
 function slugify(string $label): string {
     $slug = strtolower(trim($label));
     $slug = preg_replace('/[^a-z0-9]+/', '', $slug);
@@ -156,6 +163,7 @@ function toolDefinitions(): array {
                     'notes'    => ['type' => 'string', 'description' => 'Optional notes/description'],
                     'priority' => ['type' => 'string', 'enum' => ['high','medium','low'], 'description' => 'Priority level'],
                     'column'   => ['type' => 'string', 'description' => 'Column id to place the card in'],
+                    'due_date' => ['type' => 'string', 'description' => 'Due date in YYYY-MM-DD format (optional)'],
                 ],
                 'required' => ['title', 'priority', 'column'],
             ],
@@ -185,6 +193,7 @@ function toolDefinitions(): array {
                     'notes'    => ['type' => 'string'],
                     'priority' => ['type' => 'string', 'enum' => ['high','medium','low']],
                     'column'   => ['type' => 'string'],
+                    'due_date' => ['type' => 'string', 'description' => 'Due date in YYYY-MM-DD format'],
                 ],
                 'required' => ['ticketId'],
             ],
@@ -247,6 +256,33 @@ function toolDefinitions(): array {
                 'required' => ['id'],
             ],
         ],
+        [
+            'name'        => 'check_due_dates',
+            'description' => 'Check cards for due date status. Returns overdue, due today, and upcoming cards.',
+            'inputSchema' => [
+                'type'       => 'object',
+                'properties' => [
+                    'days_ahead' => ['type' => 'number', 'description' => 'Number of days ahead to check for upcoming cards (default 7)'],
+                ],
+                'required' => [],
+            ],
+        ],
+        [
+            'name'        => 'get_activity',
+            'description' => 'Get recent card activity/history events across all cards.',
+            'inputSchema' => [
+                'type'       => 'object',
+                'properties' => [
+                    'limit' => ['type' => 'number', 'description' => 'Max number of events to return (default 20)'],
+                ],
+                'required' => [],
+            ],
+        ],
+        [
+            'name'        => 'board_summary',
+            'description' => 'Get a health overview of the board: card counts, overdue count, stale cards.',
+            'inputSchema' => ['type' => 'object', 'properties' => [], 'required' => []],
+        ],
     ];
 }
 
@@ -301,6 +337,7 @@ function tool_add_card(array $p): string {
         'title'     => $p['title']     ?? '',
         'notes'     => $p['notes']     ?? '',
         'priority'  => $p['priority']  ?? 'medium',
+        'dueDate'   => validDate($p['due_date'] ?? ''),
         'column'    => $p['column']    ?? ($board['columns'][0]['id'] ?? 'todo'),
         'createdAt' => date('c'),
     ];
@@ -315,9 +352,31 @@ function tool_move_card(array $p): string {
     if ($board === null) return "Board '{$p['board_id']}' not found.";
     $found  = false;
     $ticket = $p['ticketId'] ?? '';
+    $targetCol = $p['column'] ?? '';
     foreach ($board['cards'] as &$card) {
         if ($card['ticketId'] === $ticket) {
-            $card['column'] = $p['column'];
+            $prevCol = $card['column'] ?? '';
+            $card['column'] = $targetCol;
+            // Only record history when actually changing columns
+            if ($targetCol !== $prevCol) {
+                if (!isset($card['history'])) $card['history'] = [];
+                if ($targetCol === 'done') {
+                    $card['completedAt'] = date('c');
+                    $card['history'][] = [
+                        'action' => 'completed',
+                        'from'   => $prevCol,
+                        'to'     => $targetCol,
+                        'date'   => date('c'),
+                    ];
+                } else {
+                    $card['history'][] = [
+                        'action' => 'moved',
+                        'from'   => $prevCol,
+                        'to'     => $targetCol,
+                        'date'   => date('c'),
+                    ];
+                }
+            }
             $found = true;
             break;
         }
@@ -325,7 +384,7 @@ function tool_move_card(array $p): string {
     unset($card);
     if (!$found) return "Card with ticketId '{$ticket}' not found.";
     writeData($data);
-    return "Moved '{$ticket}' to column '{$p['column']}'.";
+    return "Moved '{$ticket}' to column '{$targetCol}'.";
 }
 
 function tool_update_card(array $p): string {
@@ -338,6 +397,9 @@ function tool_update_card(array $p): string {
         if ($card['ticketId'] === $ticket) {
             foreach (['title','notes','priority','column'] as $f) {
                 if (array_key_exists($f, $p)) $card[$f] = $p[$f];
+            }
+            if (array_key_exists('due_date', $p)) {
+                $card['dueDate'] = validDate($p['due_date'] ?? '');
             }
             $found = true;
             break;
@@ -421,6 +483,131 @@ function tool_delete_column(array $p): string {
     return "Deleted column '{$id}'." . ($fallback ? " Cards moved to '{$fallback}'." : ' No remaining columns; cards deleted.');
 }
 
+function tool_check_due_dates(array $p): string {
+    $data = readData();
+    $daysAhead = max(0, (int)($p['days_ahead'] ?? 7));
+    $now = new \DateTime('today');
+    $overdue = [];
+    $today = [];
+    $upcoming = [];
+
+    foreach ($data['cards'] as $card) {
+        if (strtolower($card['column'] ?? '') === 'done') continue;
+        $due = $card['dueDate'] ?? '';
+        if ($due === '') continue;
+        $d = \DateTime::createFromFormat('Y-m-d', $due);
+        if (!$d) continue;
+        $d->setTime(0, 0, 0);
+        $diff = (int)$now->diff($d)->format('%r%a');
+        $entry = [
+            'title'    => $card['title'] ?? '',
+            'ticketId' => $card['ticketId'] ?? '',
+            'dueDate'  => $due,
+            'column'   => $card['column'] ?? '',
+            'days'     => $diff,
+        ];
+        if ($diff < 0) {
+            $entry['days_overdue'] = abs($diff);
+            $overdue[] = $entry;
+        } elseif ($diff === 0) {
+            $today[] = $entry;
+        } elseif ($diff <= $daysAhead) {
+            $entry['days_until_due'] = $diff;
+            $upcoming[] = $entry;
+        }
+    }
+
+    return json_encode(['overdue' => $overdue, 'today' => $today, 'upcoming' => $upcoming], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+}
+
+function tool_get_activity(array $p): string {
+    $data = readData();
+    $limit = max(0, (int)($p['limit'] ?? 20));
+    $events = [];
+
+    foreach ($data['cards'] as $card) {
+        $history = $card['history'] ?? [];
+        foreach ($history as $evt) {
+            $evt['card_title'] = $card['title'] ?? '';
+            $evt['ticketId']   = $card['ticketId'] ?? '';
+            $events[] = $evt;
+        }
+    }
+
+    // Sort by date descending
+    usort($events, function ($a, $b) {
+        return strcmp($b['date'] ?? '', $a['date'] ?? '');
+    });
+
+    $events = array_slice($events, 0, $limit);
+    return json_encode($events, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+}
+
+function tool_board_summary(): string {
+    $data = readData();
+    $cards = $data['cards'];
+    $columns = $data['columns'];
+    $total = count($cards);
+    $now = new \DateTime('today');
+    $fourteenDaysAgo = (new \DateTime('today'))->modify('-14 days');
+
+    // Cards per column
+    $perCol = [];
+    foreach ($columns as $col) {
+        $perCol[$col['id']] = 0;
+    }
+    foreach ($cards as $card) {
+        $colId = $card['column'] ?? '';
+        if (isset($perCol[$colId])) $perCol[$colId]++;
+        else $perCol[$colId] = 1;
+    }
+
+    // Overdue and due this week (skip completed cards)
+    $overdueCount = 0;
+    $dueThisWeek = 0;
+    foreach ($cards as $card) {
+        if (strtolower($card['column'] ?? '') === 'done') continue;
+        $due = $card['dueDate'] ?? '';
+        if ($due === '') continue;
+        $d = \DateTime::createFromFormat('Y-m-d', $due);
+        if (!$d) continue;
+        $d->setTime(0, 0, 0);
+        $diff = (int)$now->diff($d)->format('%r%a');
+        if ($diff < 0) $overdueCount++;
+        elseif ($diff <= 7) $dueThisWeek++;
+    }
+
+    // Stale cards: not in done, created > 14 days ago, no history events
+    $stale = [];
+    foreach ($cards as $card) {
+        if (strtolower($card['column'] ?? '') === 'done') continue;
+        $created = $card['createdAt'] ?? '';
+        if ($created === '') continue;
+        try {
+            $createdDate = new \DateTime($created);
+        } catch (\Exception $e) {
+            continue;
+        }
+        if ($createdDate > $fourteenDaysAgo) continue;
+        $history = $card['history'] ?? [];
+        if (count($history) > 0) continue;
+        $stale[] = [
+            'title'     => $card['title'] ?? '',
+            'ticketId'  => $card['ticketId'] ?? '',
+            'column'    => $card['column'] ?? '',
+            'createdAt' => $created,
+        ];
+    }
+
+    return json_encode([
+        'total_cards'     => $total,
+        'cards_per_column' => $perCol,
+        'overdue_count'   => $overdueCount,
+        'due_this_week'   => $dueThisWeek,
+        'stale_cards'     => $stale,
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+}
+
 // ─── Dispatcher ──────────────────────────────────────────────────────────────
 
 function dispatch(array $req): ?array {
@@ -465,8 +652,11 @@ function dispatch(array $req): ?array {
                 'list_columns'  => tool_list_columns($args),
                 'add_column'    => tool_add_column($args),
                 'rename_column' => tool_rename_column($args),
-                'delete_column' => tool_delete_column($args),
-                default         => "Unknown tool: {$name}",
+                'delete_column'   => tool_delete_column($args),
+                'check_due_dates' => tool_check_due_dates($args),
+                'get_activity'    => tool_get_activity($args),
+                'board_summary'   => tool_board_summary(),
+                default           => "Unknown tool: {$name}",
             };
             return ok($id, $text);
 

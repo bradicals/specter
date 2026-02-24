@@ -469,6 +469,8 @@ function htmlPage(): string {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Specter</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js" integrity="sha256-k04+Nuni2gr7Gm51B1uw8JrwUpOoROhKdHfvQJEcNJo=" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.3.1/dist/purify.min.js" integrity="sha256-m0lAV/rWZW/ZziCJ0LaJjfljLBDkXkd1pDBzpGz/yMs=" crossorigin="anonymous"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script>
   tailwind.config = {
@@ -530,6 +532,7 @@ function htmlPage(): string {
   </div>
   <div id="board-wrap"></div>
 </div>
+<div id="toast-container"></div>
 
 <script>
 'use strict';
@@ -542,11 +545,101 @@ let lastColumnsJson = '';
 let lastCardsJson   = '';
 let dragCardId      = null;
 let searchQuery     = '';
+let shownReminders  = new Set((() => { try { const v = JSON.parse(sessionStorage.getItem('shownReminders') || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } })());
 
 // ── Native bridge ────────────────────────────────────────────────────────────
 function nativeMsg(msg) {
   if (window.chrome?.webview) window.chrome.webview.postMessage(msg);
   else if (msg === 'close') window.close();
+}
+
+// ── Toast notifications ───────────────────────────────────────────────────
+function showToast(message, type) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + type;
+  const icon = document.createElement('span');
+  icon.className = 'toast-icon';
+  icon.textContent = type === 'danger' ? '\uD83D\uDD34' : '\u26A0\uFE0F';
+  const msg = document.createElement('span');
+  msg.className = 'toast-msg';
+  msg.textContent = message;
+  const close = document.createElement('button');
+  close.className = 'toast-close';
+  close.textContent = '\u00D7';
+  close.onclick = () => dismissToast(toast);
+  toast.appendChild(icon);
+  toast.appendChild(msg);
+  toast.appendChild(close);
+  container.appendChild(toast);
+  setTimeout(() => dismissToast(toast), 5000);
+}
+function dismissToast(toast) {
+  if (toast.classList.contains('toast-exit')) return;
+  toast.classList.add('toast-exit');
+  const cleanup = () => {
+    clearTimeout(fallbackTimer);
+    toast.removeEventListener('animationend', cleanup);
+    if (toast.parentNode) toast.remove();
+  };
+  toast.addEventListener('animationend', cleanup);
+  const fallbackTimer = setTimeout(cleanup, 350);
+}
+
+// ── HTML sanitizer (DOMPurify with fallback) ─────────────────────────────
+const SAFE_STYLE_PROPS = /^(white-space|padding|margin|text-align|text-indent|vertical-align|display|list-style|border-collapse|border-spacing|width|min-width|max-width|height|min-height|max-height)\s*:/i;
+function sanitizeHtml(html) {
+  if (typeof DOMPurify !== 'undefined') {
+    return DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: ['h1','h2','h3','h4','h5','h6','p','br','hr','ul','ol','li',
+        'strong','b','em','i','a','code','pre','blockquote','img','span','div','table',
+        'thead','tbody','tr','th','td','del','s','sub','sup','font'],
+      ALLOWED_ATTR: ['href','src','alt','title','target','rel','face','style'],
+      ALLOW_DATA_ATTR: false,
+      FORCE_BODY: true,
+    });
+  }
+  // Fallback: escape HTML
+  const tmp = document.createElement('div');
+  tmp.textContent = html;
+  return tmp.innerHTML;
+}
+// DOMPurify hook: filter style attribute to only allow safe layout properties
+if (typeof DOMPurify !== 'undefined') {
+  DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
+    if (data.attrName === 'style' && data.attrValue) {
+      const safe = data.attrValue.split(';')
+        .map(p => p.trim())
+        .filter(p => p && SAFE_STYLE_PROPS.test(p))
+        .join('; ');
+      data.attrValue = safe || '';
+      if (!safe) data.keepAttr = false;
+    }
+  });
+}
+
+// ── Due-date reminder check (called after poll updates) ──────────────────
+function checkDueReminders() {
+  const now = new Date(); now.setHours(0,0,0,0);
+  let changed = false;
+  state.cards.forEach(card => {
+    if (!card.dueDate || shownReminders.has(card.id)) return;
+    const d = new Date(card.dueDate + 'T00:00:00');
+    const diff = Math.floor((d - now) / 86400000);
+    if (diff < 0) {
+      shownReminders.add(card.id);
+      changed = true;
+      showToast(card.title + ' is overdue', 'danger');
+    } else if (diff === 0) {
+      shownReminders.add(card.id);
+      changed = true;
+      showToast(card.title + ' is due today', 'warning');
+    }
+  });
+  if (changed) {
+    try { sessionStorage.setItem('shownReminders', JSON.stringify(Array.from(shownReminders))); }
+    catch (e) { /* quota exceeded or storage unavailable — ignore */ }
+  }
 }
 
 // Titlebar drag — fires on mousedown anywhere in #titlebar except buttons
@@ -670,6 +763,7 @@ async function poll() {
     }
     renderTabs();
     if (changed) {
+      checkDueReminders();
       if (document.querySelector('.modal-backdrop')) return;
       render();
     }
@@ -1040,6 +1134,7 @@ function buildCard(card) {
     const now = new Date(); now.setHours(0,0,0,0);
     const diff = Math.floor((d - now) / 86400000);
     if (diff < 0) due.classList.add('overdue');
+    else if (diff === 0) due.classList.add('today');
     else if (diff <= 2) due.classList.add('soon');
     due.textContent = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     top.appendChild(due);
@@ -1067,9 +1162,10 @@ function buildCard(card) {
 
   const preview = card.description || card.notes;
   if (preview) {
+    const stripped = preview.replace(/#{1,6}\s+/g, '').replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1').replace(/`([^`]+)`/g, '$1').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/^[-*+]\s+/gm, '').replace(/^>\s+/gm, '');
     const notesEl = document.createElement('div');
     notesEl.className = 'card-notes';
-    notesEl.textContent = preview.length > 120 ? preview.slice(0, 120) + '…' : preview;
+    notesEl.textContent = stripped.length > 120 ? stripped.slice(0, 120) + '…' : stripped;
     div.appendChild(notesEl);
   }
 
@@ -1328,7 +1424,8 @@ function showCardModal(card) {
     descView.style.display = 'none';
     descIn.style.display = '';
     descIn.readOnly = false;
-    notesIn.readOnly = false;
+    notesView.style.display = 'none';
+    notesIn.style.display = '';
     titleIn.focus();
   };
   const closeBtn = document.createElement('button');
@@ -1405,22 +1502,7 @@ function showCardModal(card) {
   descView.style.height = savedDescH;
   if (card.descriptionHtml) {
     const tmp = document.createElement('div');
-    tmp.innerHTML = card.descriptionHtml;
-    // Sanitize: remove dangerous elements and attributes
-    tmp.querySelectorAll('script,style,iframe,object,embed,form,meta,link,base').forEach(el => el.remove());
-    tmp.querySelectorAll('*').forEach(el => {
-      // Strip event handler attributes (on*)
-      for (const attr of [...el.attributes]) {
-        if (attr.name.startsWith('on')) el.removeAttribute(attr.name);
-      }
-      // Strip dangerous href/src schemes
-      ['href', 'src', 'action', 'formaction', 'xlink:href'].forEach(a => {
-        const v = (el.getAttribute(a) || '').trim().toLowerCase().replace(/\s+/g, '');
-        if (v.startsWith('javascript:') || v.startsWith('vbscript:') || (v.startsWith('data:') && !v.startsWith('data:image/'))) {
-          el.removeAttribute(a);
-        }
-      });
-    });
+    tmp.innerHTML = sanitizeHtml(card.descriptionHtml);
     // Clean inline styles: strip visual overrides but keep layout/whitespace props
     tmp.querySelectorAll('*').forEach(el => {
       const s = el.getAttribute('style');
@@ -1439,7 +1521,6 @@ function showCardModal(card) {
       el.removeAttribute('color');
       if (el.tagName === 'FONT') {
         const span = document.createElement('span');
-        // Preserve monospace hint from <font face="Courier...">
         const face = (el.getAttribute('face') || '').toLowerCase();
         if (face.includes('courier') || face.includes('mono') || face.includes('consolas')) {
           span.style.fontFamily = 'Cascadia Code, Consolas, monospace';
@@ -1449,18 +1530,26 @@ function showCardModal(card) {
         el.replaceWith(span);
       }
     });
-    // Make images small clickable thumbnails that open the lightbox
     tmp.querySelectorAll('img').forEach(img => {
       const src = img.src;
       img.title = 'Click to enlarge';
       img.onclick = ev => { ev.stopPropagation(); showLightbox(src); };
       img.onerror = () => { img.style.display = 'none'; };
     });
-    tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; });
+    tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
     descView.appendChild(tmp);
-  } else {
-    descView.style.whiteSpace = 'pre-wrap';
-    descView.textContent = card.description || '';
+  } else if (card.description) {
+    const tmp = document.createElement('div');
+    const rawHtml = (typeof marked !== 'undefined' && typeof marked.parse === 'function')
+      ? marked.parse(card.description)
+      : '';
+    if (rawHtml) {
+      tmp.innerHTML = sanitizeHtml(rawHtml);
+    } else {
+      tmp.textContent = card.description;
+    }
+    tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
+    descView.appendChild(tmp);
   }
   // Save height on resize
   const descViewObs = new ResizeObserver(() => {
@@ -1477,13 +1566,35 @@ function showCardModal(card) {
     if (descIn.style.height) _saveLayout({ descHeight: descIn.style.height });
   });
 
-  // Notes
+  // Notes — rendered view (view mode) + textarea (edit mode)
+  const savedNotesH = _layout.notesHeight || '100px';
+
+  const notesView = document.createElement('div');
+  notesView.className = 'notes-html-view';
+  notesView.style.height = savedNotesH;
+  if (card.notes) {
+    const tmp = document.createElement('div');
+    const rawHtml = (typeof marked !== 'undefined' && typeof marked.parse === 'function')
+      ? marked.parse(card.notes)
+      : '';
+    if (rawHtml) {
+      tmp.innerHTML = sanitizeHtml(rawHtml);
+    } else {
+      tmp.textContent = card.notes;
+    }
+    tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
+    notesView.appendChild(tmp);
+  }
+  const notesViewObs = new ResizeObserver(() => {
+    if (notesView.style.height) _saveLayout({ notesHeight: notesView.style.height });
+  });
+  notesViewObs.observe(notesView);
+
   const notesIn = document.createElement('textarea');
   notesIn.value = card.notes || '';
   notesIn.placeholder = 'Notes…';
-  notesIn.readOnly = true;
-  const savedNotesH = _layout.notesHeight;
-  if (savedNotesH) notesIn.style.height = savedNotesH;
+  notesIn.style.height = savedNotesH;
+  notesIn.style.display = 'none';
   notesIn.addEventListener('mouseup', () => {
     if (notesIn.style.height) _saveLayout({ notesHeight: notesIn.style.height });
   });
@@ -1576,15 +1687,16 @@ function showCardModal(card) {
   saveBtn.textContent = 'Save changes';
   saveBtn.onclick = async () => {
     const updated = await api('PATCH', apiUrl(`/api/cards/${card.id}`), {
-      ticketId:    tidIn.value.trim(),
-      title:       titleIn.value.trim(),
-      description: descIn.value.trim(),
-      notes:       notesIn.value.trim(),
-      url:         urlIn.value.trim(),
-      testingUrl:  testUrlIn.value.trim(),
-      priority:    priSel.value,
-      dueDate:     dueDateIn.value,
-      column:      colSel.value,
+      ticketId:        tidIn.value.trim(),
+      title:           titleIn.value.trim(),
+      description:     descIn.value.trim(),
+      descriptionHtml: '',
+      notes:           notesIn.value.trim(),
+      url:             urlIn.value.trim(),
+      testingUrl:      testUrlIn.value.trim(),
+      priority:        priSel.value,
+      dueDate:         dueDateIn.value,
+      column:          colSel.value,
     });
     if (updated && !updated.error) {
       Object.assign(card, updated);
@@ -1596,7 +1708,30 @@ function showCardModal(card) {
     descIn.style.display = 'none';
     descView.style.display = '';
     descIn.readOnly = true;
-    notesIn.readOnly = true;
+    notesIn.style.display = 'none';
+    notesView.style.display = '';
+    // Re-render notes markdown
+    notesView.innerHTML = '';
+    if (notesIn.value.trim()) {
+      const tmp = document.createElement('div');
+      const rawHtml = (typeof marked !== 'undefined' && typeof marked.parse === 'function')
+        ? marked.parse(notesIn.value.trim()) : '';
+      if (rawHtml) { tmp.innerHTML = sanitizeHtml(rawHtml); }
+      else { tmp.textContent = notesIn.value.trim(); }
+      tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
+      notesView.appendChild(tmp);
+    }
+    // Always re-render description from textarea (descriptionHtml cleared on save)
+    descView.innerHTML = '';
+    if (descIn.value.trim()) {
+      const tmp = document.createElement('div');
+      const rawHtml = (typeof marked !== 'undefined' && typeof marked.parse === 'function')
+        ? marked.parse(descIn.value.trim()) : '';
+      if (rawHtml) { tmp.innerHTML = sanitizeHtml(rawHtml); }
+      else { tmp.textContent = descIn.value.trim(); }
+      tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
+      descView.appendChild(tmp);
+    }
     render(); // bypass poll guard — modal is on <body>, not #board-wrap
   };
 
@@ -1619,7 +1754,8 @@ function showCardModal(card) {
     descIn.style.display = 'none';
     descView.style.display = '';
     descIn.readOnly = true;
-    notesIn.readOnly = true;
+    notesIn.style.display = 'none';
+    notesView.style.display = '';
   };
 
   footer.appendChild(saveBtn);
@@ -1630,11 +1766,15 @@ function showCardModal(card) {
   descWrap.appendChild(descView);
   descWrap.appendChild(descIn);
 
+  const notesWrap = document.createElement('div');
+  notesWrap.appendChild(notesView);
+  notesWrap.appendChild(notesIn);
+
   modal.appendChild(header);
   modal.appendChild(field('Ticket ID', tidIn));
   modal.appendChild(field('Title', titleIn));
   modal.appendChild(field('Description', descWrap, true));
-  modal.appendChild(field('Notes', notesIn, true));
+  modal.appendChild(field('Notes', notesWrap, true));
   modal.appendChild(field('URL', urlRow, true));
   modal.appendChild(field('Testing Doc', testUrlRow, true));
   modal.appendChild(field('Due Date', dueDateIn, true));
