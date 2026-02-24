@@ -83,6 +83,7 @@ claude mcp add --scope user specter-kanban -- php "C:\path\to\Specter\mcp.php"
 ```
 
 Then you can just say things like:
+
 - *"Add a high priority card for the login bug to To Do"*
 - *"Move QA-101 to In Progress"*
 - *"What's sitting in Blocked right now?"*

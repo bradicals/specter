@@ -1,14 +1,7 @@
 <?php
 declare(strict_types=1);
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-function uuid4(): string {
-    $bytes = random_bytes(16);
-    $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
-    $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
-    return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
-}
+require_once __DIR__ . '/shared_helpers.php';
 
 function defaultColumns(): array {
     return [
@@ -79,18 +72,7 @@ function writeData(array $data): void {
     fclose($fp);
 }
 
-function slugify(string $label): string {
-    $slug = strtolower(trim($label));
-    $slug = preg_replace('/[^a-z0-9]+/', '', $slug);
-    return $slug ?: 'col' . substr(md5($label), 0, 6);
-}
-
-function validDate(mixed $val): string {
-    if (!is_string($val) || $val === '') return '';
-    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $val)) return '';
-    $d = \DateTime::createFromFormat('Y-m-d', $val);
-    return ($d && $d->format('Y-m-d') === $val) ? $val : '';
-}
+// ─── Server-specific helpers ────────────────────────────────────────────────
 
 function jsonOut(mixed $data, int $status = 200): void {
     http_response_code($status);
@@ -469,7 +451,7 @@ function htmlPage(): string {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Specter</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js" integrity="sha256-k04+Nuni2gr7Gm51B1uw8JrwUpOoROhKdHfvQJEcNJo=" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha256-Pn59f+s+XVjLbIBPaKtcJMx+XrYnD9bly7kSRzkhfQw=" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.3.1/dist/purify.min.js" integrity="sha256-m0lAV/rWZW/ZziCJ0LaJjfljLBDkXkd1pDBzpGz/yMs=" crossorigin="anonymous"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script>
@@ -545,7 +527,14 @@ let lastColumnsJson = '';
 let lastCardsJson   = '';
 let dragCardId      = null;
 let searchQuery     = '';
-let shownReminders  = new Set((() => { try { const v = JSON.parse(sessionStorage.getItem('shownReminders') || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } })());
+// Load shown-reminder IDs from sessionStorage (empty Set on any failure)
+function loadShownReminders() {
+  try {
+    const v = JSON.parse(sessionStorage.getItem('shownReminders') || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+}
+let shownReminders = new Set(loadShownReminders());
 
 // ── Native bridge ────────────────────────────────────────────────────────────
 function nativeMsg(msg) {
@@ -554,8 +543,25 @@ function nativeMsg(msg) {
 }
 
 // ── Toast notifications ───────────────────────────────────────────────────
+const MAX_TOASTS = 3;
+let activeToasts = [];
+let pendingToastCount = 0;
+
 function showToast(message, type) {
   const container = document.getElementById('toast-container');
+  // If at capacity, increment the overflow summary
+  if (activeToasts.length >= MAX_TOASTS) {
+    pendingToastCount++;
+    updateSummaryToast(container);
+    return;
+  }
+  const toast = createToastEl(message, type);
+  container.appendChild(toast);
+  activeToasts.push(toast);
+  setTimeout(() => dismissToast(toast), 5000);
+}
+
+function createToastEl(message, type) {
   const toast = document.createElement('div');
   toast.className = 'toast ' + type;
   const icon = document.createElement('span');
@@ -571,9 +577,30 @@ function showToast(message, type) {
   toast.appendChild(icon);
   toast.appendChild(msg);
   toast.appendChild(close);
-  container.appendChild(toast);
-  setTimeout(() => dismissToast(toast), 5000);
+  return toast;
 }
+
+function updateSummaryToast(container) {
+  let summary = container.querySelector('.toast-summary');
+  if (!summary) {
+    summary = document.createElement('div');
+    summary.className = 'toast warning toast-summary';
+    const msg = document.createElement('span');
+    msg.className = 'toast-msg';
+    summary.appendChild(msg);
+    const close = document.createElement('button');
+    close.className = 'toast-close';
+    close.textContent = '\u00D7';
+    close.onclick = () => {
+      pendingToastCount = 0;
+      if (summary.parentNode) summary.remove();
+    };
+    summary.appendChild(close);
+    container.appendChild(summary);
+  }
+  summary.querySelector('.toast-msg').textContent = 'and ' + pendingToastCount + ' more notification' + (pendingToastCount > 1 ? 's' : '');
+}
+
 function dismissToast(toast) {
   if (toast.classList.contains('toast-exit')) return;
   toast.classList.add('toast-exit');
@@ -581,6 +608,7 @@ function dismissToast(toast) {
     clearTimeout(fallbackTimer);
     toast.removeEventListener('animationend', cleanup);
     if (toast.parentNode) toast.remove();
+    activeToasts = activeToasts.filter(t => t !== toast);
   };
   toast.addEventListener('animationend', cleanup);
   const fallbackTimer = setTimeout(cleanup, 350);
@@ -618,12 +646,28 @@ if (typeof DOMPurify !== 'undefined') {
   });
 }
 
+// ── Render markdown text to a sanitized DOM fragment with safe links ──────
+function renderMarkdownFragment(text) {
+  const container = document.createElement('div');
+  if (!text || !text.trim()) return container;
+  const rawHtml = (typeof marked !== 'undefined' && typeof marked.parse === 'function')
+    ? marked.parse(text.trim()) : '';
+  if (rawHtml) {
+    container.innerHTML = sanitizeHtml(rawHtml);
+  } else {
+    container.textContent = text.trim();
+  }
+  container.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
+  return container;
+}
+
 // ── Due-date reminder check (called after poll updates) ──────────────────
 function checkDueReminders() {
   const now = new Date(); now.setHours(0,0,0,0);
   let changed = false;
   state.cards.forEach(card => {
     if (!card.dueDate || shownReminders.has(card.id)) return;
+    if ((card.column || '').toLowerCase() === 'done') return;
     const d = new Date(card.dueDate + 'T00:00:00');
     const diff = Math.floor((d - now) / 86400000);
     if (diff < 0) {
@@ -1523,17 +1567,7 @@ function showCardModal(card) {
     tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
     descView.appendChild(tmp);
   } else if (card.description) {
-    const tmp = document.createElement('div');
-    const rawHtml = (typeof marked !== 'undefined' && typeof marked.parse === 'function')
-      ? marked.parse(card.description)
-      : '';
-    if (rawHtml) {
-      tmp.innerHTML = sanitizeHtml(rawHtml);
-    } else {
-      tmp.textContent = card.description;
-    }
-    tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
-    descView.appendChild(tmp);
+    descView.appendChild(renderMarkdownFragment(card.description));
   }
   // Save height on resize
   const descViewObs = new ResizeObserver(() => {
@@ -1557,17 +1591,7 @@ function showCardModal(card) {
   notesView.className = 'notes-html-view';
   notesView.style.height = savedNotesH;
   if (card.notes) {
-    const tmp = document.createElement('div');
-    const rawHtml = (typeof marked !== 'undefined' && typeof marked.parse === 'function')
-      ? marked.parse(card.notes)
-      : '';
-    if (rawHtml) {
-      tmp.innerHTML = sanitizeHtml(rawHtml);
-    } else {
-      tmp.textContent = card.notes;
-    }
-    tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
-    notesView.appendChild(tmp);
+    notesView.appendChild(renderMarkdownFragment(card.notes));
   }
   const notesViewObs = new ResizeObserver(() => {
     if (notesView.style.height) _saveLayout({ notesHeight: notesView.style.height });
@@ -1696,26 +1720,10 @@ function showCardModal(card) {
     notesView.style.display = '';
     // Re-render notes markdown
     notesView.innerHTML = '';
-    if (notesIn.value.trim()) {
-      const tmp = document.createElement('div');
-      const rawHtml = (typeof marked !== 'undefined' && typeof marked.parse === 'function')
-        ? marked.parse(notesIn.value.trim()) : '';
-      if (rawHtml) { tmp.innerHTML = sanitizeHtml(rawHtml); }
-      else { tmp.textContent = notesIn.value.trim(); }
-      tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
-      notesView.appendChild(tmp);
-    }
+    if (notesIn.value.trim()) notesView.appendChild(renderMarkdownFragment(notesIn.value));
     // Always re-render description from textarea (descriptionHtml cleared on save)
     descView.innerHTML = '';
-    if (descIn.value.trim()) {
-      const tmp = document.createElement('div');
-      const rawHtml = (typeof marked !== 'undefined' && typeof marked.parse === 'function')
-        ? marked.parse(descIn.value.trim()) : '';
-      if (rawHtml) { tmp.innerHTML = sanitizeHtml(rawHtml); }
-      else { tmp.textContent = descIn.value.trim(); }
-      tmp.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
-      descView.appendChild(tmp);
-    }
+    if (descIn.value.trim()) descView.appendChild(renderMarkdownFragment(descIn.value));
     render(); // bypass poll guard — modal is on <body>, not #board-wrap
   };
 
