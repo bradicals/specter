@@ -45,11 +45,17 @@ function readData(): array {
     return $d;
 }
 
-function &getBoardById(array &$data, string $boardId): array {
+/**
+ * @return array|null Reference to the board, or null if an explicit boardId was not found.
+ *                    When boardId is empty, falls back to boards[0].
+ */
+function &getBoardById(array &$data, string $boardId): ?array {
+    if ($boardId === '') return $data['boards'][0];
     foreach ($data['boards'] as &$board) {
         if ($board['id'] === $boardId) return $board;
     }
-    return $data['boards'][0];
+    $null = null;
+    return $null;
 }
 
 function writeData(array $data): void {
@@ -277,6 +283,7 @@ function tool_delete_board(array $p): string {
 function tool_list_cards(array $p): string {
     $data  = readData();
     $board = &getBoardById($data, $p['board_id'] ?? '');
+    if ($board === null) return "Board '{$p['board_id']}' not found.";
     $cards = $board['cards'];
     if (!empty($p['column'])) {
         $cards = array_values(array_filter($cards, fn($c) => $c['column'] === $p['column']));
@@ -287,6 +294,7 @@ function tool_list_cards(array $p): string {
 function tool_add_card(array $p): string {
     $data = readData();
     $board = &getBoardById($data, $p['board_id'] ?? '');
+    if ($board === null) return "Board '{$p['board_id']}' not found.";
     $card = [
         'id'        => uuid4(),
         'ticketId'  => $p['ticketId']  ?? '',
@@ -304,6 +312,7 @@ function tool_add_card(array $p): string {
 function tool_move_card(array $p): string {
     $data   = readData();
     $board  = &getBoardById($data, $p['board_id'] ?? '');
+    if ($board === null) return "Board '{$p['board_id']}' not found.";
     $found  = false;
     $ticket = $p['ticketId'] ?? '';
     foreach ($board['cards'] as &$card) {
@@ -322,6 +331,7 @@ function tool_move_card(array $p): string {
 function tool_update_card(array $p): string {
     $data   = readData();
     $board  = &getBoardById($data, $p['board_id'] ?? '');
+    if ($board === null) return "Board '{$p['board_id']}' not found.";
     $found  = false;
     $ticket = $p['ticketId'] ?? '';
     foreach ($board['cards'] as &$card) {
@@ -342,6 +352,7 @@ function tool_update_card(array $p): string {
 function tool_delete_card(array $p): string {
     $data   = readData();
     $board  = &getBoardById($data, $p['board_id'] ?? '');
+    if ($board === null) return "Board '{$p['board_id']}' not found.";
     $ticket = $p['ticketId'] ?? '';
     $before = count($board['cards']);
     $board['cards'] = array_values(array_filter($board['cards'], fn($c) => $c['ticketId'] !== $ticket));
@@ -353,6 +364,7 @@ function tool_delete_card(array $p): string {
 function tool_list_columns(array $p): string {
     $data = readData();
     $board = &getBoardById($data, $p['board_id'] ?? '');
+    if ($board === null) return "Board '{$p['board_id']}' not found.";
     return json_encode($board['columns'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 }
 
@@ -361,6 +373,7 @@ function tool_add_column(array $p): string {
     if ($label === '') return 'label is required.';
     $data = readData();
     $board = &getBoardById($data, $p['board_id'] ?? '');
+    if ($board === null) return "Board '{$p['board_id']}' not found.";
     $id   = slugify($label);
     $existing = array_column($board['columns'], 'id');
     $base = $id; $i = 2;
@@ -374,6 +387,7 @@ function tool_add_column(array $p): string {
 function tool_rename_column(array $p): string {
     $data  = readData();
     $board = &getBoardById($data, $p['board_id'] ?? '');
+    if ($board === null) return "Board '{$p['board_id']}' not found.";
     $found = false;
     foreach ($board['columns'] as &$col) {
         if ($col['id'] === ($p['id'] ?? '')) {
@@ -392,6 +406,7 @@ function tool_delete_column(array $p): string {
     $id   = $p['id'] ?? '';
     $data = readData();
     $board = &getBoardById($data, $p['board_id'] ?? '');
+    if ($board === null) return "Board '{$p['board_id']}' not found.";
     $board['columns'] = array_values(array_filter($board['columns'], fn($c) => $c['id'] !== $id));
     $fallback = $board['columns'][0]['id'] ?? null;
     if ($fallback !== null) {

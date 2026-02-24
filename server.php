@@ -52,11 +52,20 @@ function readData(): array {
     return $d;
 }
 
-function &getBoardById(array &$data, string $boardId): array {
+function &getBoardById(array &$data, string $boardId): ?array {
+    if ($boardId === '') return $data['boards'][0];
     foreach ($data['boards'] as &$board) {
         if ($board['id'] === $boardId) return $board;
     }
-    return $data['boards'][0];
+    $null = null;
+    return $null;
+}
+
+/** Resolve board from ?boardId= or 404. */
+function &requireBoard(array &$data): array {
+    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    if ($board === null) { jsonOut(['error' => 'Board not found'], 404); exit; }
+    return $board;
 }
 
 function writeData(array $data): void {
@@ -156,6 +165,9 @@ if ($method === 'POST' && $uri === '/api/boards') {
 if ($method === 'PATCH' && preg_match('#^/api/boards/([^/]+)$#', $uri, $m)) {
     $id   = $m[1];
     $body = bodyJson();
+    if (isset($body['label']) && trim($body['label']) === '') {
+        jsonOut(['error' => 'label cannot be empty'], 400); exit;
+    }
     $data = readData();
     $found = null;
     foreach ($data['boards'] as &$board) {
@@ -186,7 +198,7 @@ if ($method === 'DELETE' && preg_match('#^/api/boards/([^/]+)$#', $uri, $m)) {
 // ── GET /api/cards ───────────────────────────────────────────────────────────
 if ($method === 'GET' && $uri === '/api/cards') {
     $data = readData();
-    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $board = &requireBoard($data);
     jsonOut($board['cards']);
     exit;
 }
@@ -195,7 +207,7 @@ if ($method === 'GET' && $uri === '/api/cards') {
 if ($method === 'POST' && $uri === '/api/cards') {
     $body = bodyJson();
     $data = readData();
-    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $board = &requireBoard($data);
     $card = [
         'id'              => uuid4(),
         'ticketId'        => $body['ticketId']        ?? '',
@@ -224,7 +236,7 @@ if ($method === 'PATCH' && preg_match('#^/api/cards/([^/]+)$#', $uri, $m)) {
     $body = bodyJson();
     if (array_key_exists('dueDate', $body)) $body['dueDate'] = validDate($body['dueDate'] ?? '');
     $data = readData();
-    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $board = &requireBoard($data);
     $found = null;
     foreach ($board['cards'] as &$card) {
         if ($card['id'] === $id) {
@@ -246,7 +258,7 @@ if ($method === 'PATCH' && preg_match('#^/api/cards/([^/]+)$#', $uri, $m)) {
 if ($method === 'DELETE' && preg_match('#^/api/cards/([^/]+)$#', $uri, $m)) {
     $id   = $m[1];
     $data = readData();
-    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $board = &requireBoard($data);
     $board['cards'] = array_values(array_filter($board['cards'], fn($c) => $c['id'] !== $id));
     writeData($data);
     jsonOut(['ok' => true]);
@@ -256,7 +268,7 @@ if ($method === 'DELETE' && preg_match('#^/api/cards/([^/]+)$#', $uri, $m)) {
 // ── GET /api/columns ─────────────────────────────────────────────────────────
 if ($method === 'GET' && $uri === '/api/columns') {
     $data = readData();
-    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $board = &requireBoard($data);
     jsonOut($board['columns']);
     exit;
 }
@@ -267,7 +279,7 @@ if ($method === 'POST' && $uri === '/api/columns') {
     $label = trim($body['label'] ?? '');
     if ($label === '') { jsonOut(['error' => 'label required'], 400); exit; }
     $data  = readData();
-    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $board = &requireBoard($data);
     $id    = $body['id'] ?? slugify($label);
     $existing = array_column($board['columns'], 'id');
     $base = $id; $i = 2;
@@ -284,7 +296,7 @@ if ($method === 'PATCH' && preg_match('#^/api/columns/([^/]+)$#', $uri, $m)) {
     $id   = $m[1];
     $body = bodyJson();
     $data = readData();
-    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $board = &requireBoard($data);
     $found = null;
     foreach ($board['columns'] as &$col) {
         if ($col['id'] === $id) {
@@ -304,7 +316,7 @@ if ($method === 'PATCH' && preg_match('#^/api/columns/([^/]+)$#', $uri, $m)) {
 if ($method === 'DELETE' && preg_match('#^/api/columns/([^/]+)$#', $uri, $m)) {
     $id   = $m[1];
     $data = readData();
-    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $board = &requireBoard($data);
     $board['columns'] = array_values(array_filter($board['columns'], fn($c) => $c['id'] !== $id));
     $fallback = $board['columns'][0]['id'] ?? null;
     if ($fallback !== null) {
@@ -356,6 +368,7 @@ if ($method === 'POST' && preg_match('#^/api/cards/([^/]+)/move-to-board$#', $ur
     if (!$fromBoardId || !$toBoardId) { jsonOut(['error' => 'fromBoardId and toBoardId required'], 400); exit; }
     $data = readData();
     $fromBoard = &getBoardById($data, $fromBoardId);
+    if ($fromBoard === null) { jsonOut(['error' => 'Source board not found'], 404); exit; }
     // Find and remove card from source board
     $card = null;
     $newCards = [];
@@ -367,7 +380,7 @@ if ($method === 'POST' && preg_match('#^/api/cards/([^/]+)/move-to-board$#', $ur
     $fromBoard['cards'] = $newCards;
     // Find target board
     $toBoard = &getBoardById($data, $toBoardId);
-    if ($toBoard['id'] !== $toBoardId) { jsonOut(['error' => 'Target board not found'], 404); exit; }
+    if ($toBoard === null) { jsonOut(['error' => 'Target board not found'], 404); exit; }
     // Match column by id, then by label, then fall back to first column
     $targetCol = null;
     $toCols = $toBoard['columns'];
@@ -401,7 +414,7 @@ if ($method === 'POST' && $uri === '/api/reorder') {
     $cardIds = $body['cardIds'] ?? [];
     if (!$column || !is_array($cardIds)) { jsonOut(['error' => 'column and cardIds required'], 400); exit; }
     $data = readData();
-    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $board = &requireBoard($data);
     $validCols = array_column($board['columns'], 'id');
     if (!in_array($column, $validCols, true)) { jsonOut(['error' => 'unknown column'], 400); exit; }
     $inCol  = [];
