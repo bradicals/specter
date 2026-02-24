@@ -88,7 +88,7 @@ function collectData() {
   // Ticket URL — try the hidden web-link input, otherwise build from ID
   var ticketUrl = document.querySelector('#url-web-input')?.value || '';
   if (!ticketUrl && id) {
-    ticketUrl = location.origin + '?search=' + encodeURIComponent(id);
+    ticketUrl = location.origin + '/viewitem?id=' + encodeURIComponent(id) + '&type=features&force_use_number=true';
   }
   if (!ticketUrl) ticketUrl = location.href;
 
