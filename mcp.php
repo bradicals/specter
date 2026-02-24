@@ -3,15 +3,23 @@ declare(strict_types=1);
 
 // ─── Data helpers ────────────────────────────────────────────────────────────
 
+function defaultColumns(): array {
+    return [
+        ['id' => 'todo',       'label' => 'To Do'],
+        ['id' => 'inprogress', 'label' => 'In Progress'],
+        ['id' => 'blocked',    'label' => 'Blocked'],
+        ['id' => 'done',       'label' => 'Done'],
+    ];
+}
+
 function defaultData(): array {
     return [
-        'columns' => [
-            ['id' => 'todo',       'label' => 'To Do'],
-            ['id' => 'inprogress', 'label' => 'In Progress'],
-            ['id' => 'blocked',    'label' => 'Blocked'],
-            ['id' => 'done',       'label' => 'Done'],
-        ],
-        'cards' => []
+        'boards' => [[
+            'id'      => 'main',
+            'label'   => 'Main Board',
+            'columns' => defaultColumns(),
+            'cards'   => [],
+        ]],
     ];
 }
 
@@ -19,7 +27,29 @@ function readData(): array {
     $path = __DIR__ . '/data/kanban.json';
     if (!file_exists($path)) return defaultData();
     $d = json_decode(file_get_contents($path), true);
-    return (is_array($d) && isset($d['columns'], $d['cards'])) ? $d : defaultData();
+    if (!is_array($d)) return defaultData();
+    // Legacy migration
+    if (isset($d['columns'], $d['cards']) && !isset($d['boards'])) {
+        $d = [
+            'boards' => [[
+                'id'      => 'main',
+                'label'   => 'Main Board',
+                'columns' => $d['columns'],
+                'cards'   => $d['cards'],
+            ]],
+        ];
+    }
+    if (!isset($d['boards']) || !is_array($d['boards']) || count($d['boards']) === 0) {
+        return defaultData();
+    }
+    return $d;
+}
+
+function &getBoardById(array &$data, string $boardId): array {
+    foreach ($data['boards'] as &$board) {
+        if ($board['id'] === $boardId) return $board;
+    }
+    return $data['boards'][0];
 }
 
 function writeData(array $data): void {
@@ -67,14 +97,43 @@ function err(mixed $id, int $code, string $msg): array {
 // ─── Tool definitions ────────────────────────────────────────────────────────
 
 function toolDefinitions(): array {
+    $boardIdProp = ['type' => 'string', 'description' => 'Board id (optional, defaults to first board)'];
     return [
+        [
+            'name'        => 'list_boards',
+            'description' => 'List all boards with their ids and labels.',
+            'inputSchema' => ['type' => 'object', 'properties' => new stdClass(), 'required' => []],
+        ],
+        [
+            'name'        => 'add_board',
+            'description' => 'Create a new board with default columns.',
+            'inputSchema' => [
+                'type'       => 'object',
+                'properties' => [
+                    'label' => ['type' => 'string', 'description' => 'Display name for the board'],
+                ],
+                'required' => ['label'],
+            ],
+        ],
+        [
+            'name'        => 'delete_board',
+            'description' => 'Delete a board by id. Cannot delete the last board.',
+            'inputSchema' => [
+                'type'       => 'object',
+                'properties' => [
+                    'id' => ['type' => 'string', 'description' => 'Board id to delete'],
+                ],
+                'required' => ['id'],
+            ],
+        ],
         [
             'name'        => 'list_cards',
             'description' => 'List all kanban cards, optionally filtered by column id.',
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
-                    'column' => ['type' => 'string', 'description' => 'Column id to filter by (optional)'],
+                    'board_id' => $boardIdProp,
+                    'column'   => ['type' => 'string', 'description' => 'Column id to filter by (optional)'],
                 ],
                 'required'   => [],
             ],
@@ -85,6 +144,7 @@ function toolDefinitions(): array {
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
+                    'board_id' => $boardIdProp,
                     'ticketId' => ['type' => 'string', 'description' => 'Ticket identifier, e.g. QA-101'],
                     'title'    => ['type' => 'string', 'description' => 'Card title'],
                     'notes'    => ['type' => 'string', 'description' => 'Optional notes/description'],
@@ -100,6 +160,7 @@ function toolDefinitions(): array {
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
+                    'board_id' => $boardIdProp,
                     'ticketId' => ['type' => 'string', 'description' => 'Ticket identifier'],
                     'column'   => ['type' => 'string', 'description' => 'Target column id'],
                 ],
@@ -112,6 +173,7 @@ function toolDefinitions(): array {
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
+                    'board_id' => $boardIdProp,
                     'ticketId' => ['type' => 'string', 'description' => 'Ticket identifier'],
                     'title'    => ['type' => 'string'],
                     'notes'    => ['type' => 'string'],
@@ -127,6 +189,7 @@ function toolDefinitions(): array {
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
+                    'board_id' => $boardIdProp,
                     'ticketId' => ['type' => 'string', 'description' => 'Ticket identifier'],
                 ],
                 'required' => ['ticketId'],
@@ -135,7 +198,11 @@ function toolDefinitions(): array {
         [
             'name'        => 'list_columns',
             'description' => 'List all kanban columns with their ids and labels.',
-            'inputSchema' => ['type' => 'object', 'properties' => [], 'required' => []],
+            'inputSchema' => [
+                'type'       => 'object',
+                'properties' => ['board_id' => $boardIdProp],
+                'required'   => [],
+            ],
         ],
         [
             'name'        => 'add_column',
@@ -143,7 +210,8 @@ function toolDefinitions(): array {
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
-                    'label' => ['type' => 'string', 'description' => 'Display name for the column'],
+                    'board_id' => $boardIdProp,
+                    'label'    => ['type' => 'string', 'description' => 'Display name for the column'],
                 ],
                 'required' => ['label'],
             ],
@@ -154,8 +222,9 @@ function toolDefinitions(): array {
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
-                    'id'    => ['type' => 'string', 'description' => 'Column id'],
-                    'label' => ['type' => 'string', 'description' => 'New display name'],
+                    'board_id' => $boardIdProp,
+                    'id'       => ['type' => 'string', 'description' => 'Column id'],
+                    'label'    => ['type' => 'string', 'description' => 'New display name'],
                 ],
                 'required' => ['id', 'label'],
             ],
@@ -166,7 +235,8 @@ function toolDefinitions(): array {
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
-                    'id' => ['type' => 'string', 'description' => 'Column id to delete'],
+                    'board_id' => $boardIdProp,
+                    'id'       => ['type' => 'string', 'description' => 'Column id to delete'],
                 ],
                 'required' => ['id'],
             ],
@@ -176,9 +246,38 @@ function toolDefinitions(): array {
 
 // ─── Tool implementations ────────────────────────────────────────────────────
 
+function tool_list_boards(): string {
+    $data = readData();
+    $list = array_map(fn($b) => ['id' => $b['id'], 'label' => $b['label']], $data['boards']);
+    return json_encode($list, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+}
+
+function tool_add_board(array $p): string {
+    $label = trim($p['label'] ?? '');
+    if ($label === '') return 'label is required.';
+    $data = readData();
+    $id = substr(md5(uniqid((string)mt_rand(), true)), 0, 8);
+    $board = ['id' => $id, 'label' => $label, 'columns' => defaultColumns(), 'cards' => []];
+    $data['boards'][] = $board;
+    writeData($data);
+    return "Board added: " . json_encode(['id' => $id, 'label' => $label], JSON_UNESCAPED_UNICODE);
+}
+
+function tool_delete_board(array $p): string {
+    $id   = $p['id'] ?? '';
+    $data = readData();
+    if (count($data['boards']) <= 1) return 'Cannot delete the last board.';
+    $before = count($data['boards']);
+    $data['boards'] = array_values(array_filter($data['boards'], fn($b) => $b['id'] !== $id));
+    if (count($data['boards']) === $before) return "Board '{$id}' not found.";
+    writeData($data);
+    return "Deleted board '{$id}'.";
+}
+
 function tool_list_cards(array $p): string {
     $data  = readData();
-    $cards = $data['cards'];
+    $board = &getBoardById($data, $p['board_id'] ?? '');
+    $cards = $board['cards'];
     if (!empty($p['column'])) {
         $cards = array_values(array_filter($cards, fn($c) => $c['column'] === $p['column']));
     }
@@ -187,25 +286,27 @@ function tool_list_cards(array $p): string {
 
 function tool_add_card(array $p): string {
     $data = readData();
+    $board = &getBoardById($data, $p['board_id'] ?? '');
     $card = [
         'id'        => uuid4(),
         'ticketId'  => $p['ticketId']  ?? '',
         'title'     => $p['title']     ?? '',
         'notes'     => $p['notes']     ?? '',
         'priority'  => $p['priority']  ?? 'medium',
-        'column'    => $p['column']    ?? ($data['columns'][0]['id'] ?? 'todo'),
+        'column'    => $p['column']    ?? ($board['columns'][0]['id'] ?? 'todo'),
         'createdAt' => date('c'),
     ];
-    $data['cards'][] = $card;
+    $board['cards'][] = $card;
     writeData($data);
     return 'Card added: ' . json_encode($card, JSON_UNESCAPED_UNICODE);
 }
 
 function tool_move_card(array $p): string {
     $data   = readData();
+    $board  = &getBoardById($data, $p['board_id'] ?? '');
     $found  = false;
     $ticket = $p['ticketId'] ?? '';
-    foreach ($data['cards'] as &$card) {
+    foreach ($board['cards'] as &$card) {
         if ($card['ticketId'] === $ticket) {
             $card['column'] = $p['column'];
             $found = true;
@@ -220,9 +321,10 @@ function tool_move_card(array $p): string {
 
 function tool_update_card(array $p): string {
     $data   = readData();
+    $board  = &getBoardById($data, $p['board_id'] ?? '');
     $found  = false;
     $ticket = $p['ticketId'] ?? '';
-    foreach ($data['cards'] as &$card) {
+    foreach ($board['cards'] as &$card) {
         if ($card['ticketId'] === $ticket) {
             foreach (['title','notes','priority','column'] as $f) {
                 if (array_key_exists($f, $p)) $card[$f] = $p[$f];
@@ -239,36 +341,41 @@ function tool_update_card(array $p): string {
 
 function tool_delete_card(array $p): string {
     $data   = readData();
+    $board  = &getBoardById($data, $p['board_id'] ?? '');
     $ticket = $p['ticketId'] ?? '';
-    $before = count($data['cards']);
-    $data['cards'] = array_values(array_filter($data['cards'], fn($c) => $c['ticketId'] !== $ticket));
-    if (count($data['cards']) === $before) return "Card with ticketId '{$ticket}' not found.";
+    $before = count($board['cards']);
+    $board['cards'] = array_values(array_filter($board['cards'], fn($c) => $c['ticketId'] !== $ticket));
+    if (count($board['cards']) === $before) return "Card with ticketId '{$ticket}' not found.";
     writeData($data);
     return "Deleted card '{$ticket}'.";
 }
 
-function tool_list_columns(): string {
-    return json_encode(readData()['columns'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+function tool_list_columns(array $p): string {
+    $data = readData();
+    $board = &getBoardById($data, $p['board_id'] ?? '');
+    return json_encode($board['columns'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 }
 
 function tool_add_column(array $p): string {
     $label = trim($p['label'] ?? '');
     if ($label === '') return 'label is required.';
     $data = readData();
+    $board = &getBoardById($data, $p['board_id'] ?? '');
     $id   = slugify($label);
-    $existing = array_column($data['columns'], 'id');
+    $existing = array_column($board['columns'], 'id');
     $base = $id; $i = 2;
     while (in_array($id, $existing, true)) $id = $base . $i++;
     $col = ['id' => $id, 'label' => $label];
-    $data['columns'][] = $col;
+    $board['columns'][] = $col;
     writeData($data);
     return 'Column added: ' . json_encode($col, JSON_UNESCAPED_UNICODE);
 }
 
 function tool_rename_column(array $p): string {
     $data  = readData();
+    $board = &getBoardById($data, $p['board_id'] ?? '');
     $found = false;
-    foreach ($data['columns'] as &$col) {
+    foreach ($board['columns'] as &$col) {
         if ($col['id'] === ($p['id'] ?? '')) {
             $col['label'] = $p['label'] ?? $col['label'];
             $found = true;
@@ -284,15 +391,16 @@ function tool_rename_column(array $p): string {
 function tool_delete_column(array $p): string {
     $id   = $p['id'] ?? '';
     $data = readData();
-    $data['columns'] = array_values(array_filter($data['columns'], fn($c) => $c['id'] !== $id));
-    $fallback = $data['columns'][0]['id'] ?? null;
+    $board = &getBoardById($data, $p['board_id'] ?? '');
+    $board['columns'] = array_values(array_filter($board['columns'], fn($c) => $c['id'] !== $id));
+    $fallback = $board['columns'][0]['id'] ?? null;
     if ($fallback !== null) {
-        foreach ($data['cards'] as &$card) {
+        foreach ($board['cards'] as &$card) {
             if ($card['column'] === $id) $card['column'] = $fallback;
         }
         unset($card);
     } else {
-        $data['cards'] = array_values(array_filter($data['cards'], fn($c) => $c['column'] !== $id));
+        $board['cards'] = array_values(array_filter($board['cards'], fn($c) => $c['column'] !== $id));
     }
     writeData($data);
     return "Deleted column '{$id}'." . ($fallback ? " Cards moved to '{$fallback}'." : ' No remaining columns; cards deleted.');
@@ -331,12 +439,15 @@ function dispatch(array $req): ?array {
             $name  = $params['name']      ?? '';
             $args  = $params['arguments'] ?? [];
             $text  = match($name) {
+                'list_boards'   => tool_list_boards(),
+                'add_board'     => tool_add_board($args),
+                'delete_board'  => tool_delete_board($args),
                 'list_cards'    => tool_list_cards($args),
                 'add_card'      => tool_add_card($args),
                 'move_card'     => tool_move_card($args),
                 'update_card'   => tool_update_card($args),
                 'delete_card'   => tool_delete_card($args),
-                'list_columns'  => tool_list_columns(),
+                'list_columns'  => tool_list_columns($args),
                 'add_column'    => tool_add_column($args),
                 'rename_column' => tool_rename_column($args),
                 'delete_column' => tool_delete_column($args),

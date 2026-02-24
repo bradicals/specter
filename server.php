@@ -10,15 +10,23 @@ function uuid4(): string {
     return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
 }
 
+function defaultColumns(): array {
+    return [
+        ['id' => 'todo',       'label' => 'To Do'],
+        ['id' => 'inprogress', 'label' => 'In Progress'],
+        ['id' => 'blocked',    'label' => 'Blocked'],
+        ['id' => 'done',       'label' => 'Done'],
+    ];
+}
+
 function defaultData(): array {
     return [
-        'columns' => [
-            ['id' => 'todo',       'label' => 'To Do'],
-            ['id' => 'inprogress', 'label' => 'In Progress'],
-            ['id' => 'blocked',    'label' => 'Blocked'],
-            ['id' => 'done',       'label' => 'Done'],
-        ],
-        'cards' => []
+        'boards' => [[
+            'id'      => 'main',
+            'label'   => 'Main Board',
+            'columns' => defaultColumns(),
+            'cards'   => [],
+        ]],
     ];
 }
 
@@ -26,7 +34,29 @@ function readData(): array {
     $path = __DIR__ . '/data/kanban.json';
     if (!file_exists($path)) return defaultData();
     $d = json_decode(file_get_contents($path), true);
-    return (is_array($d) && isset($d['columns'], $d['cards'])) ? $d : defaultData();
+    if (!is_array($d)) return defaultData();
+    // Legacy migration: wrap flat {columns, cards} into boards model
+    if (isset($d['columns'], $d['cards']) && !isset($d['boards'])) {
+        $d = [
+            'boards' => [[
+                'id'      => 'main',
+                'label'   => 'Main Board',
+                'columns' => $d['columns'],
+                'cards'   => $d['cards'],
+            ]],
+        ];
+    }
+    if (!isset($d['boards']) || !is_array($d['boards']) || count($d['boards']) === 0) {
+        return defaultData();
+    }
+    return $d;
+}
+
+function &getBoardById(array &$data, string $boardId): array {
+    foreach ($data['boards'] as &$board) {
+        if ($board['id'] === $boardId) return $board;
+    }
+    return $data['boards'][0];
 }
 
 function writeData(array $data): void {
@@ -100,9 +130,64 @@ if ($method === 'GET' && $uri === '/') {
     exit;
 }
 
+// ── GET /api/boards ──────────────────────────────────────────────────────────
+if ($method === 'GET' && $uri === '/api/boards') {
+    $data = readData();
+    $list = array_map(fn($b) => ['id' => $b['id'], 'label' => $b['label']], $data['boards']);
+    jsonOut($list);
+    exit;
+}
+
+// ── POST /api/boards ─────────────────────────────────────────────────────────
+if ($method === 'POST' && $uri === '/api/boards') {
+    $body  = bodyJson();
+    $label = trim($body['label'] ?? '');
+    if ($label === '') { jsonOut(['error' => 'label required'], 400); exit; }
+    $data  = readData();
+    $id    = substr(md5(uniqid((string)mt_rand(), true)), 0, 8);
+    $board = ['id' => $id, 'label' => $label, 'columns' => defaultColumns(), 'cards' => []];
+    $data['boards'][] = $board;
+    writeData($data);
+    jsonOut(['id' => $id, 'label' => $label], 201);
+    exit;
+}
+
+// ── PATCH /api/boards/{id} ───────────────────────────────────────────────────
+if ($method === 'PATCH' && preg_match('#^/api/boards/([^/]+)$#', $uri, $m)) {
+    $id   = $m[1];
+    $body = bodyJson();
+    $data = readData();
+    $found = null;
+    foreach ($data['boards'] as &$board) {
+        if ($board['id'] === $id) {
+            if (isset($body['label'])) $board['label'] = trim($body['label']);
+            $found = ['id' => $board['id'], 'label' => $board['label']];
+            break;
+        }
+    }
+    unset($board);
+    if ($found === null) { jsonOut(['error' => 'Not found'], 404); exit; }
+    writeData($data);
+    jsonOut($found);
+    exit;
+}
+
+// ── DELETE /api/boards/{id} ──────────────────────────────────────────────────
+if ($method === 'DELETE' && preg_match('#^/api/boards/([^/]+)$#', $uri, $m)) {
+    $id   = $m[1];
+    $data = readData();
+    if (count($data['boards']) <= 1) { jsonOut(['error' => 'Cannot delete last board'], 400); exit; }
+    $data['boards'] = array_values(array_filter($data['boards'], fn($b) => $b['id'] !== $id));
+    writeData($data);
+    jsonOut(['ok' => true]);
+    exit;
+}
+
 // ── GET /api/cards ───────────────────────────────────────────────────────────
 if ($method === 'GET' && $uri === '/api/cards') {
-    jsonOut(readData()['cards']);
+    $data = readData();
+    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    jsonOut($board['cards']);
     exit;
 }
 
@@ -110,6 +195,7 @@ if ($method === 'GET' && $uri === '/api/cards') {
 if ($method === 'POST' && $uri === '/api/cards') {
     $body = bodyJson();
     $data = readData();
+    $board = &getBoardById($data, $_GET['boardId'] ?? '');
     $card = [
         'id'              => uuid4(),
         'ticketId'        => $body['ticketId']        ?? '',
@@ -121,12 +207,12 @@ if ($method === 'POST' && $uri === '/api/cards') {
         'testingUrl'      => $body['testingUrl']      ?? '',
         'priority'        => $body['priority']        ?? 'medium',
         'dueDate'         => validDate($body['dueDate'] ?? ''),
-        'column'          => $body['column']          ?? ($data['columns'][0]['id'] ?? 'todo'),
+        'column'          => $body['column']          ?? ($board['columns'][0]['id'] ?? 'todo'),
         'attachments'     => $body['attachments']     ?? [],
         'links'           => $body['links']           ?? [],
         'createdAt'       => date('c'),
     ];
-    $data['cards'][] = $card;
+    $board['cards'][] = $card;
     writeData($data);
     jsonOut($card, 201);
     exit;
@@ -138,8 +224,9 @@ if ($method === 'PATCH' && preg_match('#^/api/cards/([^/]+)$#', $uri, $m)) {
     $body = bodyJson();
     if (array_key_exists('dueDate', $body)) $body['dueDate'] = validDate($body['dueDate'] ?? '');
     $data = readData();
+    $board = &getBoardById($data, $_GET['boardId'] ?? '');
     $found = null;
-    foreach ($data['cards'] as &$card) {
+    foreach ($board['cards'] as &$card) {
         if ($card['id'] === $id) {
             foreach (['ticketId','title','description','descriptionHtml','notes','url','testingUrl','priority','dueDate','column','attachments','links'] as $f) {
                 if (array_key_exists($f, $body)) $card[$f] = $body[$f];
@@ -159,7 +246,8 @@ if ($method === 'PATCH' && preg_match('#^/api/cards/([^/]+)$#', $uri, $m)) {
 if ($method === 'DELETE' && preg_match('#^/api/cards/([^/]+)$#', $uri, $m)) {
     $id   = $m[1];
     $data = readData();
-    $data['cards'] = array_values(array_filter($data['cards'], fn($c) => $c['id'] !== $id));
+    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $board['cards'] = array_values(array_filter($board['cards'], fn($c) => $c['id'] !== $id));
     writeData($data);
     jsonOut(['ok' => true]);
     exit;
@@ -167,7 +255,9 @@ if ($method === 'DELETE' && preg_match('#^/api/cards/([^/]+)$#', $uri, $m)) {
 
 // ── GET /api/columns ─────────────────────────────────────────────────────────
 if ($method === 'GET' && $uri === '/api/columns') {
-    jsonOut(readData()['columns']);
+    $data = readData();
+    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    jsonOut($board['columns']);
     exit;
 }
 
@@ -177,13 +267,13 @@ if ($method === 'POST' && $uri === '/api/columns') {
     $label = trim($body['label'] ?? '');
     if ($label === '') { jsonOut(['error' => 'label required'], 400); exit; }
     $data  = readData();
+    $board = &getBoardById($data, $_GET['boardId'] ?? '');
     $id    = $body['id'] ?? slugify($label);
-    // ensure uniqueness
-    $existing = array_column($data['columns'], 'id');
+    $existing = array_column($board['columns'], 'id');
     $base = $id; $i = 2;
     while (in_array($id, $existing, true)) $id = $base . $i++;
     $col = ['id' => $id, 'label' => $label];
-    $data['columns'][] = $col;
+    $board['columns'][] = $col;
     writeData($data);
     jsonOut($col, 201);
     exit;
@@ -194,8 +284,9 @@ if ($method === 'PATCH' && preg_match('#^/api/columns/([^/]+)$#', $uri, $m)) {
     $id   = $m[1];
     $body = bodyJson();
     $data = readData();
+    $board = &getBoardById($data, $_GET['boardId'] ?? '');
     $found = null;
-    foreach ($data['columns'] as &$col) {
+    foreach ($board['columns'] as &$col) {
         if ($col['id'] === $id) {
             if (isset($body['label'])) $col['label'] = $body['label'];
             $found = $col;
@@ -213,15 +304,16 @@ if ($method === 'PATCH' && preg_match('#^/api/columns/([^/]+)$#', $uri, $m)) {
 if ($method === 'DELETE' && preg_match('#^/api/columns/([^/]+)$#', $uri, $m)) {
     $id   = $m[1];
     $data = readData();
-    $data['columns'] = array_values(array_filter($data['columns'], fn($c) => $c['id'] !== $id));
-    $fallback = $data['columns'][0]['id'] ?? null;
+    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $board['columns'] = array_values(array_filter($board['columns'], fn($c) => $c['id'] !== $id));
+    $fallback = $board['columns'][0]['id'] ?? null;
     if ($fallback !== null) {
-        foreach ($data['cards'] as &$card) {
+        foreach ($board['cards'] as &$card) {
             if ($card['column'] === $id) $card['column'] = $fallback;
         }
         unset($card);
     } else {
-        $data['cards'] = array_values(array_filter($data['cards'], fn($c) => $c['column'] !== $id));
+        $board['cards'] = array_values(array_filter($board['cards'], fn($c) => $c['column'] !== $id));
     }
     writeData($data);
     jsonOut(['ok' => true]);
@@ -232,6 +324,7 @@ if ($method === 'DELETE' && preg_match('#^/api/columns/([^/]+)$#', $uri, $m)) {
 if ($method === 'POST' && $uri === '/api/import') {
     $body = bodyJson();
     $data = readData();
+    $board = &$data['boards'][0]; // Always import to first board for Chrome extension compat
     $card = [
         'id'              => uuid4(),
         'ticketId'        => $body['ticketId']        ?? '',
@@ -243,14 +336,61 @@ if ($method === 'POST' && $uri === '/api/import') {
         'testingUrl'      => $body['testingUrl']      ?? '',
         'priority'        => $body['priority']        ?? 'medium',
         'dueDate'         => validDate($body['dueDate'] ?? ''),
-        'column'          => $data['columns'][0]['id'] ?? 'todo',
+        'column'          => $board['columns'][0]['id'] ?? 'todo',
         'attachments'     => $body['attachments']     ?? [],
         'links'           => $body['links']           ?? [],
         'createdAt'       => date('c'),
     ];
-    $data['cards'][] = $card;
+    $board['cards'][] = $card;
     writeData($data);
     jsonOut($card, 201);
+    exit;
+}
+
+// ── POST /api/cards/{id}/move-to-board ───────────────────────────────────────
+if ($method === 'POST' && preg_match('#^/api/cards/([^/]+)/move-to-board$#', $uri, $m)) {
+    $cardId      = $m[1];
+    $body        = bodyJson();
+    $fromBoardId = $body['fromBoardId'] ?? '';
+    $toBoardId   = $body['toBoardId']   ?? '';
+    if (!$fromBoardId || !$toBoardId) { jsonOut(['error' => 'fromBoardId and toBoardId required'], 400); exit; }
+    $data = readData();
+    $fromBoard = &getBoardById($data, $fromBoardId);
+    // Find and remove card from source board
+    $card = null;
+    $newCards = [];
+    foreach ($fromBoard['cards'] as $c) {
+        if ($c['id'] === $cardId) { $card = $c; }
+        else { $newCards[] = $c; }
+    }
+    if ($card === null) { jsonOut(['error' => 'Card not found on source board'], 404); exit; }
+    $fromBoard['cards'] = $newCards;
+    // Find target board
+    $toBoard = &getBoardById($data, $toBoardId);
+    if ($toBoard['id'] !== $toBoardId) { jsonOut(['error' => 'Target board not found'], 404); exit; }
+    // Match column by id, then by label, then fall back to first column
+    $targetCol = null;
+    $toCols = $toBoard['columns'];
+    foreach ($toCols as $col) {
+        if ($col['id'] === $card['column']) { $targetCol = $col['id']; break; }
+    }
+    if (!$targetCol) {
+        // Try matching by label
+        $fromColLabel = null;
+        foreach ($fromBoard['columns'] as $col) {
+            if ($col['id'] === $card['column']) { $fromColLabel = $col['label']; break; }
+        }
+        if ($fromColLabel) {
+            foreach ($toCols as $col) {
+                if (strcasecmp($col['label'], $fromColLabel) === 0) { $targetCol = $col['id']; break; }
+            }
+        }
+    }
+    if (!$targetCol) { $targetCol = $toCols[0]['id'] ?? 'todo'; }
+    $card['column'] = $targetCol;
+    $toBoard['cards'][] = $card;
+    writeData($data);
+    jsonOut($card);
     exit;
 }
 
@@ -261,27 +401,22 @@ if ($method === 'POST' && $uri === '/api/reorder') {
     $cardIds = $body['cardIds'] ?? [];
     if (!$column || !is_array($cardIds)) { jsonOut(['error' => 'column and cardIds required'], 400); exit; }
     $data = readData();
-    $validCols = array_column($data['columns'], 'id');
+    $board = &getBoardById($data, $_GET['boardId'] ?? '');
+    $validCols = array_column($board['columns'], 'id');
     if (!in_array($column, $validCols, true)) { jsonOut(['error' => 'unknown column'], 400); exit; }
-    // Separate cards in target column from others
     $inCol  = [];
     $others = [];
-    foreach ($data['cards'] as $card) {
+    foreach ($board['cards'] as $card) {
         if ($card['column'] === $column) $inCol[$card['id']] = $card;
         else $others[] = $card;
     }
-    // Build reordered list from cardIds, then append any stragglers
     $ordered = [];
     foreach ($cardIds as $id) {
         if (isset($inCol[$id])) { $ordered[] = $inCol[$id]; unset($inCol[$id]); }
     }
     foreach ($inCol as $card) $ordered[] = $card;
-    // Rebuild: others first (preserving order), then ordered column cards interleaved at original column positions
-    // Simpler: just rebuild entire array keeping column groups in order
     $result = [];
-    $colInserted = false;
-    $seenCols = [];
-    foreach ($data['columns'] as $col) {
+    foreach ($board['columns'] as $col) {
         if ($col['id'] === $column) {
             foreach ($ordered as $c) $result[] = $c;
         } else {
@@ -290,7 +425,7 @@ if ($method === 'POST' && $uri === '/api/reorder') {
             }
         }
     }
-    $data['cards'] = $result;
+    $board['cards'] = $result;
     writeData($data);
     jsonOut(['ok' => true]);
     exit;
@@ -357,11 +492,18 @@ function htmlPage(): string {
 <div id="app">
   <div id="titlebar">
     <span class="ghost-title">&#128123; Specter</span>
+    <div id="board-tabs"></div>
     <div class="win-btns">
+      <button id="search-btn" onclick="toggleSearch()" title="Search (Ctrl+F)" style="-webkit-app-region:no-drag;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--text-dim);font-size:12px;padding:1px 6px;cursor:pointer;height:22px;margin-right:2px;line-height:1;">&#128269;</button>
       <button id="settings-btn" onclick="showSettings()" title="Settings" style="-webkit-app-region:no-drag;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--text-dim);font-size:14px;padding:1px 6px;cursor:pointer;height:22px;margin-right:2px;line-height:1;">&#9881;</button>
       <button onclick="stashApp()" title="Stash to side">&#x25B6;</button>
       <button class="close-btn" onclick="nativeMsg('close')" title="Close">&#10005;</button>
     </div>
+  </div>
+  <div id="search-overlay" class="hidden">
+    <span class="search-icon">&#128269;</span>
+    <input id="search-input" type="text" placeholder="Search cards…" autocomplete="off" spellcheck="false">
+    <button id="search-clear" title="Clear search">&times;</button>
   </div>
   <div id="board-wrap"></div>
 </div>
@@ -370,10 +512,13 @@ function htmlPage(): string {
 'use strict';
 
 // ── State ────────────────────────────────────────────────────────────────────
-let state = { columns: [], cards: [] };
+let state = { boards: [], columns: [], cards: [] };
+let state_activeBoardId = localStorage.getItem('specter-active-board') || null;
+let lastBoardsJson  = '';
 let lastColumnsJson = '';
 let lastCardsJson   = '';
 let dragCardId      = null;
+let searchQuery     = '';
 
 // ── Native bridge ────────────────────────────────────────────────────────────
 function nativeMsg(msg) {
@@ -388,7 +533,58 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   initColorScheme();
   initTheme();
+  // Search
+  const searchInput = document.getElementById('search-input');
+  const searchClear = document.getElementById('search-clear');
+  const searchOverlay = document.getElementById('search-overlay');
+  searchInput.addEventListener('input', () => {
+    searchQuery = searchInput.value.trim().toLowerCase();
+    searchClear.classList.toggle('visible', searchQuery.length > 0);
+    render();
+  });
+  searchClear.addEventListener('click', () => {
+    searchInput.value = '';
+    searchQuery = '';
+    searchClear.classList.remove('visible');
+    render();
+    searchInput.focus();
+  });
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeSearch();
+  });
+  // Ctrl+F opens search
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      toggleSearch(true);
+    }
+  });
 });
+
+// ── Search overlay ────────────────────────────────────────────────────────────
+function toggleSearch(forceOpen) {
+  const overlay = document.getElementById('search-overlay');
+  const input = document.getElementById('search-input');
+  const isHidden = overlay.classList.contains('hidden');
+  if (forceOpen || isHidden) {
+    overlay.classList.remove('hidden');
+    input.focus();
+    input.select();
+  } else {
+    closeSearch();
+  }
+}
+function closeSearch() {
+  const overlay = document.getElementById('search-overlay');
+  const input = document.getElementById('search-input');
+  overlay.classList.add('hidden');
+  if (searchQuery) {
+    input.value = '';
+    searchQuery = '';
+    document.getElementById('search-clear').classList.remove('visible');
+    render();
+  }
+}
 
 // ── Stash ────────────────────────────────────────────────────────────────────
 function stashApp() {
@@ -410,21 +606,48 @@ async function api(method, path, body) {
   return r.json();
 }
 
+// ── Board helpers ─────────────────────────────────────────────────────────────
+function boardParam() {
+  return state_activeBoardId ? `boardId=${encodeURIComponent(state_activeBoardId)}` : '';
+}
+function apiUrl(path) {
+  const sep = path.includes('?') ? '&' : '?';
+  return state_activeBoardId ? `${path}${sep}boardId=${encodeURIComponent(state_activeBoardId)}` : path;
+}
+
 // ── Poll ─────────────────────────────────────────────────────────────────────
 async function poll() {
   try {
+    // 1. Fetch board list
+    const boards = await fetch('/api/boards').then(r => r.json());
+    const bj = JSON.stringify(boards);
+    if (bj !== lastBoardsJson) {
+      lastBoardsJson = bj;
+      state.boards = boards;
+    }
+    // 2. Resolve activeBoardId
+    if (!state_activeBoardId || !boards.find(b => b.id === state_activeBoardId)) {
+      state_activeBoardId = boards[0]?.id || null;
+      if (state_activeBoardId) localStorage.setItem('specter-active-board', state_activeBoardId);
+    }
+    // 3. Fetch columns + cards for active board
+    const bp = boardParam();
     const [columns, cards] = await Promise.all([
-      fetch('/api/columns').then(r => r.json()),
-      fetch('/api/cards').then(r => r.json()),
+      fetch('/api/columns' + (bp ? '?' + bp : '')).then(r => r.json()),
+      fetch('/api/cards' + (bp ? '?' + bp : '')).then(r => r.json()),
     ]);
     const cj = JSON.stringify(columns);
     const kj = JSON.stringify(cards);
-    if (cj !== lastColumnsJson || kj !== lastCardsJson) {
+    const changed = cj !== lastColumnsJson || kj !== lastCardsJson;
+    if (changed) {
       lastColumnsJson = cj;
       lastCardsJson   = kj;
       state.columns   = columns;
       state.cards     = cards;
-      if (document.querySelector('.modal-backdrop')) return; // don't blow away open modal
+    }
+    renderTabs();
+    if (changed) {
+      if (document.querySelector('.modal-backdrop')) return;
       render();
     }
   } catch (e) { /* server may be starting up */ }
@@ -432,13 +655,147 @@ async function poll() {
 setInterval(poll, 2000);
 poll();
 
+// ── Board Tabs ───────────────────────────────────────────────────────────────
+function renderTabs() {
+  const container = document.getElementById('board-tabs');
+  if (!container) return;
+  const existing = container.dataset.json;
+  const key = JSON.stringify({ boards: state.boards, active: state_activeBoardId });
+  if (existing === key) return;
+  container.dataset.json = key;
+  container.innerHTML = '';
+  state.boards.forEach(b => {
+    const tab = document.createElement('button');
+    tab.className = 'board-tab' + (b.id === state_activeBoardId ? ' active' : '');
+    tab.onclick = () => switchBoard(b.id);
+    tab.ondblclick = (e) => {
+      e.stopPropagation();
+      showPrompt('Rename board:', b.label, async (newName) => {
+        await api('PATCH', `/api/boards/${b.id}`, { label: newName });
+        lastBoardsJson = '';
+        await poll();
+      });
+    };
+    const label = document.createElement('span');
+    label.className = 'tab-label';
+    label.textContent = b.label;
+    tab.appendChild(label);
+    if (state.boards.length > 1) {
+      const close = document.createElement('span');
+      close.className = 'tab-close';
+      close.textContent = '×';
+      close.onclick = (e) => { e.stopPropagation(); deleteBoard(b.id, b.label); };
+      tab.appendChild(close);
+    }
+    container.appendChild(tab);
+  });
+  const addBtn = document.createElement('button');
+  addBtn.id = 'add-board-btn';
+  addBtn.textContent = '+';
+  addBtn.title = 'New board';
+  addBtn.onclick = addBoard;
+  container.appendChild(addBtn);
+}
+
+function switchBoard(id) {
+  if (id === state_activeBoardId) return;
+  state_activeBoardId = id;
+  localStorage.setItem('specter-active-board', id);
+  lastColumnsJson = '';
+  lastCardsJson   = '';
+  document.querySelector('.modal-backdrop')?.remove();
+  poll();
+}
+
+function addBoard() {
+  showPrompt('New board name:', 'e.g. Work', async (name) => {
+    const res = await api('POST', '/api/boards', { label: name });
+    if (res && res.id) {
+      lastBoardsJson = '';
+      switchBoard(res.id);
+    }
+  });
+}
+
+function deleteBoard(id, label) {
+  showConfirm(`Delete board "${label}"? All its cards will be lost.`, async () => {
+    await api('DELETE', `/api/boards/${id}`);
+    lastBoardsJson = '';
+    if (state_activeBoardId === id) {
+      state_activeBoardId = null;
+      localStorage.removeItem('specter-active-board');
+    }
+    lastColumnsJson = '';
+    lastCardsJson   = '';
+    await poll();
+  });
+}
+
+// ── Context Menu (move card to board) ─────────────────────────────────────────
+function dismissContextMenu() {
+  document.querySelector('.ctx-menu')?.remove();
+}
+document.addEventListener('click', dismissContextMenu);
+document.addEventListener('contextmenu', e => {
+  if (!e.target.closest('.ctx-menu')) dismissContextMenu();
+});
+
+function showCardContextMenu(e, card) {
+  e.preventDefault();
+  e.stopPropagation();
+  dismissContextMenu();
+  const otherBoards = state.boards.filter(b => b.id !== state_activeBoardId);
+  if (otherBoards.length === 0) return; // only one board, nothing to move to
+
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top  = e.clientY + 'px';
+
+  const header = document.createElement('div');
+  header.className = 'ctx-menu-header';
+  header.textContent = 'Move to board';
+  menu.appendChild(header);
+
+  otherBoards.forEach(b => {
+    const item = document.createElement('button');
+    item.className = 'ctx-menu-item';
+    item.textContent = b.label;
+    item.onclick = async () => {
+      dismissContextMenu();
+      await api('POST', `/api/cards/${card.id}/move-to-board`, {
+        fromBoardId: state_activeBoardId,
+        toBoardId: b.id,
+      });
+      lastCardsJson = '';
+      await poll();
+    };
+    menu.appendChild(item);
+  });
+
+  document.body.appendChild(menu);
+  // Keep menu in viewport
+  requestAnimationFrame(() => {
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 4) + 'px';
+    if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 4) + 'px';
+  });
+}
+
 // ── Render ───────────────────────────────────────────────────────────────────
 function render() {
   const wrap = document.getElementById('board-wrap');
   wrap.innerHTML = '';
 
+  const filteredCards = searchQuery
+    ? state.cards.filter(c => {
+        const hay = `${c.ticketId} ${c.title} ${c.description} ${c.notes}`.toLowerCase();
+        return hay.includes(searchQuery);
+      })
+    : state.cards;
+
   state.columns.forEach(col => {
-    const cards = state.cards.filter(c => c.column === col.id);
+    const cards = filteredCards.filter(c => c.column === col.id);
     wrap.appendChild(buildColumn(col, cards));
   });
 
@@ -510,10 +867,10 @@ function buildColumn(col, cards) {
       // If the card came from a different column, move it first
       const draggedCard = state.cards.find(c => c.id === dragCardId);
       if (draggedCard && draggedCard.column !== col.id) {
-        await api('PATCH', `/api/cards/${dragCardId}`, { column: col.id });
+        await api('PATCH', apiUrl(`/api/cards/${dragCardId}`), { column: col.id });
       }
       // Reorder
-      await api('POST', '/api/reorder', { column: col.id, cardIds: newOrder });
+      await api('POST', apiUrl('/api/reorder'), { column: col.id, cardIds: newOrder });
       dragCardId = null;
       // Force refresh
       lastCardsJson = '';
@@ -561,7 +918,7 @@ function buildColumn(col, cards) {
   const saveTitle = async () => {
     const v = titleInput.value.trim();
     if (v && v !== col.label) {
-      await api('PATCH', `/api/columns/${col.id}`, { label: v });
+      await api('PATCH', apiUrl(`/api/columns/${col.id}`), { label: v });
       await poll();
     } else { titleInput.value = col.label; }
   };
@@ -578,7 +935,7 @@ function buildColumn(col, cards) {
   delBtn.textContent = '×';
   delBtn.onclick = async () => {
     if (confirm(`Delete column "${col.label}"? Cards will move to the next column.`)) {
-      await api('DELETE', `/api/columns/${col.id}`);
+      await api('DELETE', apiUrl(`/api/columns/${col.id}`));
       await poll();
     }
   };
@@ -615,6 +972,10 @@ function buildCard(card) {
   div.addEventListener('dblclick', e => {
     e.stopPropagation();
     showCardModal(card);
+  });
+
+  div.addEventListener('contextmenu', e => {
+    if (state.boards.length > 1) showCardContextMenu(e, card);
   });
 
   div.addEventListener('dragstart', () => {
@@ -660,7 +1021,7 @@ function buildCard(card) {
   del.onclick = e => {
     e.stopPropagation();
     showConfirm('Delete this card? This cannot be undone.', async () => {
-      await api('DELETE', `/api/cards/${card.id}`);
+      await api('DELETE', apiUrl(`/api/cards/${card.id}`));
       await poll();
     });
   };
@@ -830,7 +1191,7 @@ function showNewCardModal(colId) {
   saveBtn.onclick = async () => {
     const t = titleIn.value.trim();
     if (!t) { titleIn.focus(); return; }
-    await api('POST', '/api/cards', {
+    await api('POST', apiUrl('/api/cards'), {
       ticketId:    tidIn.value.trim(),
       title:       t,
       description: descIn.value.trim(),
@@ -1183,7 +1544,7 @@ function showCardModal(card) {
   saveBtn.className = 'btn-save';
   saveBtn.textContent = 'Save changes';
   saveBtn.onclick = async () => {
-    const updated = await api('PATCH', `/api/cards/${card.id}`, {
+    const updated = await api('PATCH', apiUrl(`/api/cards/${card.id}`), {
       ticketId:    tidIn.value.trim(),
       title:       titleIn.value.trim(),
       description: descIn.value.trim(),
@@ -1213,7 +1574,7 @@ function showCardModal(card) {
   delBtn.textContent = 'Delete';
   delBtn.onclick = () => {
     showConfirm('Delete this card? This cannot be undone.', async () => {
-      await api('DELETE', `/api/cards/${card.id}`);
+      await api('DELETE', apiUrl(`/api/cards/${card.id}`));
       backdrop.remove();
       await poll();
     });
@@ -1368,7 +1729,7 @@ function showPrompt(message, placeholder, onConfirm) {
 
 async function addColumn() {
   showPrompt('New column name:', 'e.g. In Review', async label => {
-    await api('POST', '/api/columns', { label });
+    await api('POST', apiUrl('/api/columns'), { label });
     await poll();
   });
 }
