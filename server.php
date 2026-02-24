@@ -240,8 +240,18 @@ if ($method === 'PATCH' && preg_match('#^/api/cards/([^/]+)$#', $uri, $m)) {
     $found = null;
     foreach ($board['cards'] as &$card) {
         if ($card['id'] === $id) {
+            $prevCol = $card['column'];
             foreach (['ticketId','title','description','descriptionHtml','notes','url','testingUrl','priority','dueDate','column','attachments','links'] as $f) {
                 if (array_key_exists($f, $body)) $card[$f] = $body[$f];
+            }
+            // Track completion history
+            if (!isset($card['history'])) $card['history'] = [];
+            if ($card['column'] === 'done' && $prevCol !== 'done') {
+                $card['completedAt'] = date('c');
+                $card['history'][] = ['action' => 'completed', 'date' => date('c')];
+            } elseif ($card['column'] !== 'done' && $prevCol === 'done') {
+                $card['completedAt'] = null;
+                $card['history'][] = ['action' => 'reopened', 'date' => date('c'), 'movedTo' => $card['column']];
             }
             $found = $card;
             break;
@@ -1015,6 +1025,14 @@ function buildCard(card) {
   pri.textContent = card.priority;
   top.appendChild(pri);
 
+  if (card.completedAt) {
+    const done = document.createElement('span');
+    done.className = 'complete-badge';
+    done.textContent = 'Complete';
+    done.title = 'Completed ' + new Date(card.completedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    top.appendChild(done);
+  }
+
   if (card.dueDate) {
     const due = document.createElement('span');
     due.className = 'due-badge';
@@ -1634,6 +1652,51 @@ function showCardModal(card) {
       linksList.appendChild(a);
     });
     modal.appendChild(field('Links', linksList, true));
+  }
+
+  // History section
+  const history = card.history || [];
+  if (card.completedAt || card.createdAt || history.length > 0) {
+    const historyList = document.createElement('div');
+    historyList.className = 'history-list';
+    if (card.createdAt) {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+      const dot = document.createElement('span');
+      dot.className = 'history-dot created';
+      const text = document.createElement('span');
+      text.textContent = 'Created';
+      const time = document.createElement('span');
+      time.className = 'history-time';
+      time.textContent = new Date(card.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+      item.appendChild(dot);
+      item.appendChild(text);
+      item.appendChild(time);
+      historyList.appendChild(item);
+    }
+    history.forEach(h => {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+      const dot = document.createElement('span');
+      dot.className = 'history-dot ' + h.action;
+      const text = document.createElement('span');
+      if (h.action === 'completed') {
+        text.textContent = 'Marked complete';
+      } else if (h.action === 'reopened') {
+        const colLabel = state.columns.find(c => c.id === h.movedTo)?.label || h.movedTo;
+        text.textContent = `Reopened \u2192 ${colLabel}`;
+      } else {
+        text.textContent = h.action;
+      }
+      const time = document.createElement('span');
+      time.className = 'history-time';
+      time.textContent = new Date(h.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+      item.appendChild(dot);
+      item.appendChild(text);
+      item.appendChild(time);
+      historyList.appendChild(item);
+    });
+    modal.appendChild(field('History', historyList, true));
   }
 
   modal.appendChild(footer);
