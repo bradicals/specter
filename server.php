@@ -1503,32 +1503,16 @@ function showCardModal(card) {
   if (card.descriptionHtml) {
     const tmp = document.createElement('div');
     tmp.innerHTML = sanitizeHtml(card.descriptionHtml);
-    // Clean inline styles: strip visual overrides but keep layout/whitespace props
-    tmp.querySelectorAll('*').forEach(el => {
-      const s = el.getAttribute('style');
-      if (s) {
-        const cleaned = s
-          .replace(/font-size\s*:[^;]+;?/gi, '')
-          .replace(/background(-color)?\s*:[^;]+;?/gi, '')
-          .replace(/color\s*:[^;]+;?/gi, '')
-          .replace(/font-family\s*:[^;]*(arial|helvetica|times|verdana|georgia|calibri|tahoma)[^;]*;?/gi, '')
-          .trim().replace(/;+$/, '');
-        if (cleaned) el.setAttribute('style', cleaned);
-        else el.removeAttribute('style');
+    // Convert <font> elements to <span> (preserving monospace hints)
+    tmp.querySelectorAll('font').forEach(el => {
+      const span = document.createElement('span');
+      const face = (el.getAttribute('face') || '').toLowerCase();
+      if (face.includes('courier') || face.includes('mono') || face.includes('consolas')) {
+        span.style.fontFamily = 'Cascadia Code, Consolas, monospace';
+        span.style.whiteSpace = 'pre-wrap';
       }
-      el.removeAttribute('class');
-      el.removeAttribute('bgcolor');
-      el.removeAttribute('color');
-      if (el.tagName === 'FONT') {
-        const span = document.createElement('span');
-        const face = (el.getAttribute('face') || '').toLowerCase();
-        if (face.includes('courier') || face.includes('mono') || face.includes('consolas')) {
-          span.style.fontFamily = 'Cascadia Code, Consolas, monospace';
-          span.style.whiteSpace = 'pre-wrap';
-        }
-        while (el.firstChild) span.appendChild(el.firstChild);
-        el.replaceWith(span);
-      }
+      while (el.firstChild) span.appendChild(el.firstChild);
+      el.replaceWith(span);
     });
     tmp.querySelectorAll('img').forEach(img => {
       const src = img.src;
