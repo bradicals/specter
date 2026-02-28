@@ -72,6 +72,35 @@ function writeData(array $data): void {
 }
 
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Validate that a column ID exists on a board. Returns error string or null.
+ */
+function validateColumn(array $board, string $columnId): ?string {
+    $validIds = array_column($board['columns'], 'id');
+    if (!in_array($columnId, $validIds, true)) {
+        return "Column '{$columnId}' not found. Valid columns: " . implode(', ', $validIds);
+    }
+    return null;
+}
+
+/**
+ * Find a card by ticketId first, then by card UUID as fallback.
+ * Returns the array index or -1 if not found.
+ */
+function findCardIndex(array $cards, string $identifier): int {
+    // Try ticketId first
+    foreach ($cards as $i => $card) {
+        if ($card['ticketId'] === $identifier) return $i;
+    }
+    // Fallback to card UUID
+    foreach ($cards as $i => $card) {
+        if ($card['id'] === $identifier) return $i;
+    }
+    return -1;
+}
+
 // ─── MCP response builders ───────────────────────────────────────────────────
 
 function ok(mixed $id, string $text): array {
@@ -124,7 +153,7 @@ function toolDefinitions(): array {
         ],
         [
             'name'        => 'list_cards',
-            'description' => 'List all kanban cards, optionally filtered by column id.',
+            'description' => 'List all kanban cards (compact summary). Use get_card for full details.',
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
@@ -132,6 +161,18 @@ function toolDefinitions(): array {
                     'column'   => ['type' => 'string', 'description' => 'Column id to filter by (optional)'],
                 ],
                 'required'   => [],
+            ],
+        ],
+        [
+            'name'        => 'get_card',
+            'description' => 'Get full details of a single card by ticketId or card UUID.',
+            'inputSchema' => [
+                'type'       => 'object',
+                'properties' => [
+                    'board_id' => $boardIdProp,
+                    'ticketId' => ['type' => 'string', 'description' => 'Ticket identifier or card UUID'],
+                ],
+                'required' => ['ticketId'],
             ],
         ],
         [
@@ -153,12 +194,12 @@ function toolDefinitions(): array {
         ],
         [
             'name'        => 'move_card',
-            'description' => 'Move a card to a different column by ticketId.',
+            'description' => 'Move a card to a different column by ticketId or card UUID.',
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
                     'board_id' => $boardIdProp,
-                    'ticketId' => ['type' => 'string', 'description' => 'Ticket identifier'],
+                    'ticketId' => ['type' => 'string', 'description' => 'Ticket identifier or card UUID'],
                     'column'   => ['type' => 'string', 'description' => 'Target column id'],
                 ],
                 'required' => ['ticketId', 'column'],
@@ -166,12 +207,12 @@ function toolDefinitions(): array {
         ],
         [
             'name'        => 'update_card',
-            'description' => 'Update fields on an existing card identified by ticketId.',
+            'description' => 'Update fields on an existing card identified by ticketId or card UUID.',
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
                     'board_id' => $boardIdProp,
-                    'ticketId' => ['type' => 'string', 'description' => 'Ticket identifier'],
+                    'ticketId' => ['type' => 'string', 'description' => 'Ticket identifier or card UUID'],
                     'title'    => ['type' => 'string'],
                     'notes'    => ['type' => 'string'],
                     'priority' => ['type' => 'string', 'enum' => ['high','medium','low']],
@@ -183,12 +224,12 @@ function toolDefinitions(): array {
         ],
         [
             'name'        => 'delete_card',
-            'description' => 'Delete a card by ticketId.',
+            'description' => 'Delete a card by ticketId or card UUID.',
             'inputSchema' => [
                 'type'       => 'object',
                 'properties' => [
                     'board_id' => $boardIdProp,
-                    'ticketId' => ['type' => 'string', 'description' => 'Ticket identifier'],
+                    'ticketId' => ['type' => 'string', 'description' => 'Ticket identifier or card UUID'],
                 ],
                 'required' => ['ticketId'],
             ],
@@ -313,13 +354,36 @@ function tool_list_cards(array $p): string {
     if (!empty($p['column'])) {
         $cards = array_values(array_filter($cards, fn($c) => $c['column'] === $p['column']));
     }
-    return json_encode($cards, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    // Return compact summary — use get_card for full details
+    $compact = array_map(fn($c) => [
+        'id'       => $c['id'] ?? '',
+        'ticketId' => $c['ticketId'] ?? '',
+        'title'    => $c['title'] ?? '',
+        'priority' => $c['priority'] ?? '',
+        'column'   => $c['column'] ?? '',
+        'dueDate'  => $c['dueDate'] ?? '',
+        'notes'    => $c['notes'] ?? '',
+    ], $cards);
+    return json_encode($compact, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+}
+
+function tool_get_card(array $p): string {
+    $data  = readData();
+    $board = &getBoardById($data, $p['board_id'] ?? '');
+    if ($board === null) return "Board '{$p['board_id']}' not found.";
+    $identifier = $p['ticketId'] ?? '';
+    $idx = findCardIndex($board['cards'], $identifier);
+    if ($idx === -1) return "Card '{$identifier}' not found.";
+    return json_encode($board['cards'][$idx], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 }
 
 function tool_add_card(array $p): string {
     $data = readData();
     $board = &getBoardById($data, $p['board_id'] ?? '');
     if ($board === null) return "Board '{$p['board_id']}' not found.";
+    $columnId = $p['column'] ?? ($board['columns'][0]['id'] ?? 'todo');
+    $colErr = validateColumn($board, $columnId);
+    if ($colErr !== null) return $colErr;
     $card = [
         'id'        => uuid4(),
         'ticketId'  => $p['ticketId']  ?? '',
@@ -327,7 +391,7 @@ function tool_add_card(array $p): string {
         'notes'     => $p['notes']     ?? '',
         'priority'  => $p['priority']  ?? 'medium',
         'dueDate'   => validDate($p['due_date'] ?? ''),
-        'column'    => $p['column']    ?? ($board['columns'][0]['id'] ?? 'todo'),
+        'column'    => $columnId,
         'createdAt' => date('c'),
     ];
     $board['cards'][] = $card;
@@ -339,85 +403,86 @@ function tool_move_card(array $p): string {
     $data   = readData();
     $board  = &getBoardById($data, $p['board_id'] ?? '');
     if ($board === null) return "Board '{$p['board_id']}' not found.";
-    $found  = false;
-    $ticket = $p['ticketId'] ?? '';
-    $targetCol = $p['column'] ?? '';
-    foreach ($board['cards'] as &$card) {
-        if ($card['ticketId'] === $ticket) {
-            $prevCol = $card['column'] ?? '';
-            $card['column'] = $targetCol;
-            // Only record history when actually changing columns
-            if ($targetCol !== $prevCol) {
-                if (!isset($card['history'])) $card['history'] = [];
-                if (isDoneColumn($targetCol, $board)) {
-                    $card['completedAt'] = date('c');
-                    $card['history'][] = [
-                        'action' => 'completed',
-                        'from'   => $prevCol,
-                        'to'     => $targetCol,
-                        'date'   => date('c'),
-                    ];
-                } else {
-                    $card['history'][] = [
-                        'action' => 'moved',
-                        'from'   => $prevCol,
-                        'to'     => $targetCol,
-                        'date'   => date('c'),
-                    ];
-                }
-            }
-            $found = true;
-            break;
+    $identifier = $p['ticketId'] ?? '';
+    $targetCol  = $p['column'] ?? '';
+    $colErr = validateColumn($board, $targetCol);
+    if ($colErr !== null) return $colErr;
+    $idx = findCardIndex($board['cards'], $identifier);
+    if ($idx === -1) return "Card '{$identifier}' not found.";
+    $card = &$board['cards'][$idx];
+    $prevCol = $card['column'] ?? '';
+    $card['column'] = $targetCol;
+    // Only record history when actually changing columns
+    if ($targetCol !== $prevCol) {
+        if (!isset($card['history'])) $card['history'] = [];
+        if (isDoneColumn($targetCol, $board)) {
+            $card['completedAt'] = date('c');
+            $card['history'][] = [
+                'action' => 'completed',
+                'from'   => $prevCol,
+                'to'     => $targetCol,
+                'date'   => date('c'),
+            ];
+        } else {
+            $card['history'][] = [
+                'action' => 'moved',
+                'from'   => $prevCol,
+                'to'     => $targetCol,
+                'date'   => date('c'),
+            ];
         }
     }
     unset($card);
-    if (!$found) return "Card with ticketId '{$ticket}' not found.";
     writeData($data);
-    return "Moved '{$ticket}' to column '{$targetCol}'.";
+    $label = $board['cards'][$idx]['ticketId'] ?: $board['cards'][$idx]['title'];
+    return "Moved '{$label}' to column '{$targetCol}'.";
 }
 
 function tool_update_card(array $p): string {
     $data    = readData();
     $board   = &getBoardById($data, $p['board_id'] ?? '');
     if ($board === null) return "Board '{$p['board_id']}' not found.";
-    $found   = false;
-    $ticket  = $p['ticketId'] ?? '';
-    $prevCol = '';
-    foreach ($board['cards'] as &$card) {
-        if ($card['ticketId'] === $ticket) {
-            $prevCol = $card['column'] ?? '';
-            foreach (['title','notes','priority'] as $f) {
-                if (array_key_exists($f, $p)) $card[$f] = $p[$f];
-            }
-            if (array_key_exists('due_date', $p)) {
-                $card['dueDate'] = validDate($p['due_date'] ?? '');
-            }
-            $found = true;
-            break;
-        }
+    $identifier = $p['ticketId'] ?? '';
+    $idx = findCardIndex($board['cards'], $identifier);
+    if ($idx === -1) return "Card '{$identifier}' not found.";
+    // Validate column before making any changes
+    if (array_key_exists('column', $p)) {
+        $colErr = validateColumn($board, $p['column']);
+        if ($colErr !== null) return $colErr;
+    }
+    $card = &$board['cards'][$idx];
+    $prevCol = $card['column'] ?? '';
+    foreach (['title','notes','priority'] as $f) {
+        if (array_key_exists($f, $p)) $card[$f] = $p[$f];
+    }
+    if (array_key_exists('due_date', $p)) {
+        $card['dueDate'] = validDate($p['due_date'] ?? '');
     }
     unset($card);
-    if (!$found) return "Card with ticketId '{$ticket}' not found.";
     writeData($data);
 
     // Delegate column change to tool_move_card for history/completedAt tracking
     if (array_key_exists('column', $p) && $p['column'] !== $prevCol) {
-        tool_move_card(['ticketId' => $ticket, 'column' => $p['column']]);
+        // Use the card's actual ticketId or UUID for the move
+        $moveId = $board['cards'][$idx]['ticketId'] ?: $board['cards'][$idx]['id'];
+        tool_move_card(['ticketId' => $moveId, 'column' => $p['column'], 'board_id' => $p['board_id'] ?? '']);
     }
 
-    return "Updated card '{$ticket}'.";
+    $label = $board['cards'][$idx]['ticketId'] ?: $board['cards'][$idx]['title'];
+    return "Updated card '{$label}'.";
 }
 
 function tool_delete_card(array $p): string {
     $data   = readData();
     $board  = &getBoardById($data, $p['board_id'] ?? '');
     if ($board === null) return "Board '{$p['board_id']}' not found.";
-    $ticket = $p['ticketId'] ?? '';
-    $before = count($board['cards']);
-    $board['cards'] = array_values(array_filter($board['cards'], fn($c) => $c['ticketId'] !== $ticket));
-    if (count($board['cards']) === $before) return "Card with ticketId '{$ticket}' not found.";
+    $identifier = $p['ticketId'] ?? '';
+    $idx = findCardIndex($board['cards'], $identifier);
+    if ($idx === -1) return "Card '{$identifier}' not found.";
+    $label = $board['cards'][$idx]['ticketId'] ?: $board['cards'][$idx]['title'];
+    array_splice($board['cards'], $idx, 1);
     writeData($data);
-    return "Deleted card '{$ticket}'.";
+    return "Deleted card '{$label}'.";
 }
 
 function tool_list_columns(array $p): string {
@@ -648,6 +713,7 @@ function dispatch(array $req): ?array {
                 'add_board'     => tool_add_board($args),
                 'delete_board'  => tool_delete_board($args),
                 'list_cards'    => tool_list_cards($args),
+                'get_card'      => tool_get_card($args),
                 'add_card'      => tool_add_card($args),
                 'move_card'     => tool_move_card($args),
                 'update_card'   => tool_update_card($args),
