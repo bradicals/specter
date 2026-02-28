@@ -46,6 +46,11 @@ class SpecterForm : Form
     [DllImport("gdi32.dll")]  static extern IntPtr CreateRectRgn(int x1, int y1, int x2, int y2);
     [DllImport("gdi32.dll")]  static extern int    CombineRgn(IntPtr dest, IntPtr src1, IntPtr src2, int mode);
     [DllImport("gdi32.dll")]  static extern bool   DeleteObject(IntPtr hObject);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern bool   GetWindowRect(IntPtr hWnd, out RECT rect);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct RECT { public int Left, Top, Right, Bottom; }
 
     const int RGN_OR = 2;
     [DllImport("dwmapi.dll")] static extern int    DwmExtendFrameIntoClientArea(IntPtr hwnd, ref MARGINS margins);
@@ -67,6 +72,7 @@ class SpecterForm : Form
     private          Size        _savedSize;
     private          bool        _stashed    = false;
     private          bool        _tabVisible = false;
+    private          int         _stashY     = -1;    // persisted vertical position (-1 = auto center)
 
     const int TAB_WIDTH  = 46;
     const int TAB_HEIGHT = 200;
@@ -199,7 +205,7 @@ class SpecterForm : Form
         _tray.Dispose();
 
         if (_stashed)
-            try { File.WriteAllText(_cfgPath, $"{_savedPos.X},{_savedPos.Y},{_savedSize.Width},{_savedSize.Height}"); }
+            try { File.WriteAllText(_cfgPath, $"{_savedPos.X},{_savedPos.Y},{_savedSize.Width},{_savedSize.Height},{_stashY}"); }
             catch { /* ignore */ }
         else
             SavePosition();
@@ -212,20 +218,27 @@ class SpecterForm : Form
         Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
     {
         var msg = e.TryGetWebMessageAsString();
+        if (msg != null && msg.StartsWith("tab-drag:"))
+        {
+            if (int.TryParse(msg.AsSpan("tab-drag:".Length), out int deltaY))
+                Invoke(() => MoveTabBy(deltaY));
+            return;
+        }
         switch (msg)
         {
-            case "close":      Invoke(Application.Exit);             break;
-            case "drag":       Invoke(BeginDrag);                    break;
-            case "stash":      Invoke(StashToEdge);                  break;
-            case "unstash":    Invoke(UnstashFromEdge);              break;
-            case "resize-t":   Invoke(() => BeginResize(HTTOP));         break;
-            case "resize-b":   Invoke(() => BeginResize(HTBOTTOM));      break;
-            case "resize-l":   Invoke(() => BeginResize(HTLEFT));        break;
-            case "resize-r":   Invoke(() => BeginResize(HTRIGHT));       break;
-            case "resize-tl":  Invoke(() => BeginResize(HTTOPLEFT));     break;
-            case "resize-tr":  Invoke(() => BeginResize(HTTOPRIGHT));    break;
-            case "resize-bl":  Invoke(() => BeginResize(HTBOTTOMLEFT));  break;
-            case "resize-br":  Invoke(() => BeginResize(HTBOTTOMRIGHT)); break;
+            case "close":          Invoke(Application.Exit);             break;
+            case "drag":           Invoke(BeginDrag);                    break;
+            case "stash":          Invoke(StashToEdge);                  break;
+            case "unstash":        Invoke(UnstashFromEdge);              break;
+            case "tab-drag-end":   Invoke(EndTabDrag);                   break;
+            case "resize-t":       Invoke(() => BeginResize(HTTOP));         break;
+            case "resize-b":       Invoke(() => BeginResize(HTBOTTOM));      break;
+            case "resize-l":       Invoke(() => BeginResize(HTLEFT));        break;
+            case "resize-r":       Invoke(() => BeginResize(HTRIGHT));       break;
+            case "resize-tl":      Invoke(() => BeginResize(HTTOPLEFT));     break;
+            case "resize-tr":      Invoke(() => BeginResize(HTTOPRIGHT));    break;
+            case "resize-bl":      Invoke(() => BeginResize(HTBOTTOMLEFT));  break;
+            case "resize-br":      Invoke(() => BeginResize(HTBOTTOMRIGHT)); break;
         }
     }
 
@@ -242,6 +255,21 @@ class SpecterForm : Form
         SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
     }
 
+    private void MoveTabBy(int deltaY)
+    {
+        if (!_stashed) return;
+        var bounds = Screen.FromControl(this).Bounds;
+        int newY = Math.Clamp(Top + deltaY, bounds.Top, bounds.Bottom - TAB_HEIGHT);
+        Location = new Point(Left, newY);
+    }
+
+    private void EndTabDrag()
+    {
+        if (!_stashed) return;
+        _stashY = Top;
+        SavePosition();
+    }
+
     private void BeginResize(int htCode)
     {
         ReleaseCapture();
@@ -254,11 +282,16 @@ class SpecterForm : Form
         _hoverTimer = new System.Windows.Forms.Timer { Interval = 80 };
         _hoverTimer.Tick += (s, e) =>
         {
+            if (IsForegroundFullscreen())
+            {
+                if (_tabVisible) { Opacity = 0.0; _tabVisible = false; }
+                return;
+            }
+
             var cursor = Cursor.Position;
             bool over  = Bounds.Contains(cursor);
             if (over && !_tabVisible)
             {
-                // Force to top of z-order over every other window, then show
                 SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
                 Opacity      = 1.0;
                 _tabVisible  = true;
@@ -278,7 +311,9 @@ class SpecterForm : Form
         _savedPos  = Location;
         _savedSize = new Size(Width, Height);
         var bounds = Screen.FromControl(this).Bounds;
-        int tabY   = bounds.Top + (bounds.Height - TAB_HEIGHT) / 2;
+        int tabY = _stashY >= 0
+            ? Math.Clamp(_stashY, bounds.Top, bounds.Bottom - TAB_HEIGHT)
+            : bounds.Top + (bounds.Height - TAB_HEIGHT) / 2;
         Width    = TAB_WIDTH;
         Height   = TAB_HEIGHT;
         Location = new Point(bounds.Right - TAB_WIDTH, tabY);
@@ -323,10 +358,20 @@ class SpecterForm : Form
         Activate();
     }
 
+    private bool IsForegroundFullscreen()
+    {
+        var fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero || fg == Handle) return false;
+        if (!GetWindowRect(fg, out RECT r)) return false;
+        var screen = Screen.FromHandle(fg).Bounds;
+        return r.Left <= screen.Left && r.Top <= screen.Top
+            && r.Right >= screen.Right && r.Bottom >= screen.Bottom;
+    }
+
     // ── Persistence ───────────────────────────────────────────────────────────
     private void SavePosition()
     {
-        try { File.WriteAllText(_cfgPath, $"{Left},{Top},{Width},{Height}"); }
+        try { File.WriteAllText(_cfgPath, $"{Left},{Top},{Width},{Height},{_stashY}"); }
         catch { /* ignore */ }
     }
 
@@ -347,6 +392,10 @@ class SpecterForm : Form
             {
                 Width  = Math.Max(400, w);
                 Height = Math.Max(300, h);
+            }
+            if (p.Length >= 5 && int.TryParse(p[4], out int sy))
+            {
+                _stashY = sy;
             }
         }
         catch { /* ignore */ }

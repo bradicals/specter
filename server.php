@@ -228,12 +228,14 @@ if ($method === 'PATCH' && preg_match('#^/api/cards/([^/]+)$#', $uri, $m)) {
             }
             // Track completion history
             if (!isset($card['history'])) $card['history'] = [];
-            if ($card['column'] === 'done' && $prevCol !== 'done') {
-                $card['completedAt'] = date('c');
-                $card['history'][] = ['action' => 'completed', 'date' => date('c')];
-            } elseif ($card['column'] !== 'done' && $prevCol === 'done') {
-                $card['completedAt'] = null;
-                $card['history'][] = ['action' => 'reopened', 'date' => date('c'), 'movedTo' => $card['column']];
+            if ($card['column'] !== $prevCol) {
+                if ($card['column'] === 'done') {
+                    $card['completedAt'] = date('c');
+                    $card['history'][] = ['action' => 'completed', 'from' => $prevCol, 'to' => $card['column'], 'date' => date('c')];
+                } else {
+                    if ($prevCol === 'done') $card['completedAt'] = null;
+                    $card['history'][] = ['action' => 'moved', 'from' => $prevCol, 'to' => $card['column'], 'date' => date('c')];
+                }
             }
             $found = $card;
             break;
@@ -436,6 +438,37 @@ if ($method === 'POST' && $uri === '/api/reorder') {
     exit;
 }
 
+// ── POST /api/column-reorder ──────────────────────────────────────────────────
+if ($method === 'POST' && $uri === '/api/column-reorder') {
+    $body      = bodyJson();
+    $columnIds = $body['columnIds'] ?? [];
+    if (!is_array($columnIds) || count($columnIds) === 0) {
+        jsonOut(['error' => 'columnIds array required'], 400);
+        exit;
+    }
+    $data  = readData();
+    $board = &requireBoard($data);
+    $colMap = [];
+    foreach ($board['columns'] as $col) {
+        $colMap[$col['id']] = $col;
+    }
+    $reordered = [];
+    foreach ($columnIds as $cid) {
+        if (isset($colMap[$cid])) {
+            $reordered[] = $colMap[$cid];
+            unset($colMap[$cid]);
+        }
+    }
+    // Append any columns not in the provided list (safety)
+    foreach ($colMap as $col) {
+        $reordered[] = $col;
+    }
+    $board['columns'] = $reordered;
+    writeData($data);
+    jsonOut($reordered);
+    exit;
+}
+
 // ── 404 ──────────────────────────────────────────────────────────────────────
 jsonOut(['error' => 'Not found'], 404);
 exit;
@@ -488,7 +521,7 @@ function htmlPage(): string {
 <div class="rsz rsz-ne" onmousedown="nativeMsg('resize-tr')"></div>
 <div class="rsz rsz-sw" onmousedown="nativeMsg('resize-bl')"></div>
 <div class="rsz rsz-se" onmousedown="nativeMsg('resize-br')"></div>
-<div id="stash-tab" onclick="unstashApp()">
+<div id="stash-tab">
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M12 2C8.13 2 5 5.13 5 9v9l2-2 2 2 2-2 2 2 2-2 2 2V9c0-3.87-3.13-7-7-7z" fill="#7b8fff"/>
     <circle cx="9.5" cy="9.5" r="1.5" fill="#0e1018"/>
@@ -503,6 +536,7 @@ function htmlPage(): string {
     <div class="win-btns">
       <button id="search-btn" onclick="toggleSearch()" title="Search (Ctrl+F)" style="-webkit-app-region:no-drag;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--text-dim);font-size:12px;padding:1px 6px;cursor:pointer;height:22px;margin-right:2px;line-height:1;">&#128269;</button>
       <button id="settings-btn" onclick="showSettings()" title="Settings" style="-webkit-app-region:no-drag;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--text-dim);font-size:14px;padding:1px 6px;cursor:pointer;height:22px;margin-right:2px;line-height:1;">&#9881;</button>
+      <button id="report-btn" onclick="showReportModal()" title="Activity Report" style="-webkit-app-region:no-drag;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--text-dim);font-size:13px;padding:1px 6px;cursor:pointer;height:22px;margin-right:2px;line-height:1;">&#128202;</button>
       <button onclick="stashApp()" title="Stash to side">&#x25B6;</button>
       <button class="close-btn" onclick="nativeMsg('close')" title="Close">&#10005;</button>
     </div>
@@ -526,6 +560,7 @@ let lastBoardsJson  = '';
 let lastColumnsJson = '';
 let lastCardsJson   = '';
 let dragCardId      = null;
+let colDragState    = null; // { colId, el, insertBefore }
 let searchQuery     = '';
 // Load shown-reminder IDs from sessionStorage (empty Set on any failure)
 function loadShownReminders() {
@@ -566,7 +601,7 @@ function createToastEl(message, type) {
   toast.className = 'toast ' + type;
   const icon = document.createElement('span');
   icon.className = 'toast-icon';
-  icon.textContent = type === 'danger' ? '\uD83D\uDD34' : '\u26A0\uFE0F';
+  icon.textContent = type === 'success' ? '\u2705' : type === 'danger' ? '\uD83D\uDD34' : '\u26A0\uFE0F';
   const msg = document.createElement('span');
   msg.className = 'toast-msg';
   msg.textContent = message;
@@ -757,6 +792,42 @@ function unstashApp() {
   document.getElementById('stash-tab').classList.remove('visible');
   nativeMsg('unstash');
 }
+
+// ── Stash tab drag ───────────────────────────────────────────────────────────
+(function setupTabDrag() {
+  const tab = document.getElementById('stash-tab');
+  let dragging = false;
+  let startY = 0;
+  let moved = false;
+
+  tab.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    dragging = true;
+    moved = false;
+    startY = e.screenY;
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const deltaY = e.screenY - startY;
+    if (Math.abs(deltaY) > 3) moved = true;
+    if (moved) {
+      nativeMsg('tab-drag:' + deltaY);
+      startY = e.screenY;
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    if (moved) {
+      nativeMsg('tab-drag-end');
+    } else {
+      unstashApp();
+    }
+  });
+})();
 
 // ── API ──────────────────────────────────────────────────────────────────────
 async function api(method, path, body) {
@@ -1104,6 +1175,87 @@ function buildColumn(col, cards) {
   header.appendChild(titleInput);
   header.appendChild(count);
   header.appendChild(delBtn);
+  // ── Hold-to-drag column reorder ──
+  let holdTimer = null;
+  header.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    if (e.target === titleInput || e.target === delBtn) return;
+    e.preventDefault();
+    header.classList.add('hold-pending');
+
+    holdTimer = setTimeout(() => {
+      header.classList.remove('hold-pending');
+      div.classList.add('column-dragging');
+      colDragState = { colId: col.id, el: div, insertBefore: null };
+
+      const onMove = (ev) => {
+        if (!colDragState) return;
+        const board = document.getElementById('board-wrap');
+        const columns = [...board.querySelectorAll('.column:not(.column-dragging)')];
+        board.querySelectorAll('.col-drop-indicator').forEach(el => el.remove());
+
+        const indicator = document.createElement('div');
+        indicator.className = 'col-drop-indicator';
+
+        let insertBefore = null;
+        for (const c of columns) {
+          const rect = c.getBoundingClientRect();
+          if (ev.clientX < rect.left + rect.width / 2) {
+            insertBefore = c;
+            break;
+          }
+        }
+        if (insertBefore) {
+          board.insertBefore(indicator, insertBefore);
+        } else {
+          board.appendChild(indicator);
+        }
+        colDragState.insertBefore = insertBefore;
+      };
+
+      const onUp = async () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        if (!colDragState) return;
+
+        div.classList.remove('column-dragging');
+        document.querySelectorAll('.col-drop-indicator').forEach(el => el.remove());
+
+        // Build new column order
+        const newOrder = state.columns.map(c => c.id);
+        const fromIdx = newOrder.indexOf(colDragState.colId);
+        if (fromIdx !== -1) {
+          newOrder.splice(fromIdx, 1);
+          const target = colDragState.insertBefore;
+          if (target) {
+            const toIdx = newOrder.indexOf(target.dataset.colId);
+            newOrder.splice(toIdx, 0, colDragState.colId);
+          } else {
+            newOrder.push(colDragState.colId);
+          }
+        }
+
+        colDragState = null;
+        await api('POST', apiUrl('/api/column-reorder'), { columnIds: newOrder });
+        lastColumnsJson = '';
+        await poll();
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    }, 1000);
+  });
+
+  header.addEventListener('mouseup', () => {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    header.classList.remove('hold-pending');
+  });
+
+  header.addEventListener('mouseleave', () => {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    header.classList.remove('hold-pending');
+  });
+
   div.appendChild(header);
 
   // Cards list
@@ -1477,8 +1629,6 @@ function showCardModal(card) {
   closeBtn.textContent = '×';
   closeBtn.onclick = () => backdrop.remove();
   header.appendChild(mTitle);
-  header.appendChild(editBtn);
-  header.appendChild(closeBtn);
 
   // Per-card layout (heights + collapse state)
   const _layoutKey = 'specter-layout-' + (card.ticketId || card.id);
@@ -1686,14 +1836,34 @@ function showCardModal(card) {
   row.appendChild(field('Priority', priSel));
   row.appendChild(field('Column', colSel));
 
-  // Footer buttons
-  const footer = document.createElement('div');
-  footer.className = 'modal-footer';
+  // ── Action panel (left side of modal) ──
+  const actionPanel = document.createElement('div');
+  actionPanel.className = 'action-panel';
 
-  const saveBtn = document.createElement('button');
-  saveBtn.className = 'btn-save';
-  saveBtn.textContent = 'Save changes';
-  saveBtn.onclick = async () => {
+  const mkAction = (label, icon, cls, fn) => {
+    const btn = document.createElement('button');
+    btn.className = 'action-panel-btn ' + cls;
+    btn.title = label;
+    btn.innerHTML = icon;
+    btn.onclick = fn;
+    return btn;
+  };
+
+  const apEdit = mkAction('Edit', '&#9998;', 'ap-edit', () => {
+    modal.classList.remove('view-mode');
+    descView.style.display = 'none';
+    descIn.style.display = '';
+    descIn.readOnly = false;
+    notesView.style.display = 'none';
+    notesIn.style.display = '';
+    apEdit.style.display = 'none';
+    apSave.style.display = '';
+    apCancel.style.display = '';
+    apDelete.style.display = '';
+    titleIn.focus();
+  });
+
+  const apSave = mkAction('Save', '&#10003;', 'ap-save', async () => {
     const updated = await api('PATCH', apiUrl(`/api/cards/${card.id}`), {
       ticketId:        tidIn.value.trim(),
       title:           titleIn.value.trim(),
@@ -1724,35 +1894,45 @@ function showCardModal(card) {
     // Always re-render description from textarea (descriptionHtml cleared on save)
     descView.innerHTML = '';
     if (descIn.value.trim()) descView.appendChild(renderMarkdownFragment(descIn.value));
+    apEdit.style.display = '';
+    apSave.style.display = 'none';
+    apCancel.style.display = 'none';
+    apDelete.style.display = 'none';
     render(); // bypass poll guard — modal is on <body>, not #board-wrap
-  };
+  });
 
-  const delBtn = document.createElement('button');
-  delBtn.className = 'btn-danger';
-  delBtn.textContent = 'Delete';
-  delBtn.onclick = () => {
+  const apDelete = mkAction('Delete', '&#128465;', 'ap-delete', () => {
     showConfirm('Delete this card? This cannot be undone.', async () => {
       await api('DELETE', apiUrl(`/api/cards/${card.id}`));
       backdrop.remove();
       await poll();
     });
-  };
+  });
 
-  const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'btn-cancel';
-  cancelBtn.textContent = 'Cancel';
-  cancelBtn.onclick = () => {
+  const apCancel = mkAction('Cancel', '&#10007;', 'ap-cancel', () => {
     modal.classList.add('view-mode');
-    descIn.style.display = 'none';
     descView.style.display = '';
-    descIn.readOnly = true;
-    notesIn.style.display = 'none';
+    descIn.style.display = 'none';
     notesView.style.display = '';
-  };
+    notesIn.style.display = 'none';
+    apEdit.style.display = '';
+    apSave.style.display = 'none';
+    apCancel.style.display = 'none';
+    apDelete.style.display = 'none';
+  });
 
-  footer.appendChild(saveBtn);
-  footer.appendChild(delBtn);
-  footer.appendChild(cancelBtn);
+  const apClose = mkAction('Close', '&times;', 'ap-close', () => backdrop.remove());
+
+  // Initial state: view-mode (hide save/cancel/delete)
+  apSave.style.display = 'none';
+  apCancel.style.display = 'none';
+  apDelete.style.display = 'none';
+
+  actionPanel.appendChild(apEdit);
+  actionPanel.appendChild(apSave);
+  actionPanel.appendChild(apDelete);
+  actionPanel.appendChild(apCancel);
+  actionPanel.appendChild(apClose);
 
   const descWrap = document.createElement('div');
   descWrap.appendChild(descView);
@@ -1814,9 +1994,14 @@ function showCardModal(card) {
       const text = document.createElement('span');
       if (h.action === 'completed') {
         text.textContent = 'Marked complete';
-      } else if (h.action === 'reopened') {
-        const colLabel = state.columns.find(c => c.id === h.movedTo)?.label || h.movedTo;
-        text.textContent = `Reopened \u2192 ${colLabel}`;
+      } else if (h.action === 'reopened' || (h.action === 'moved' && h.from === 'done')) {
+        const toLabel = state.columns.find(c => c.id === (h.to || h.movedTo))?.label || h.to || h.movedTo || '?';
+        text.textContent = `Reopened \u2192 ${toLabel}`;
+        dot.className = 'history-dot reopened';
+      } else if (h.action === 'moved') {
+        const fromLabel = state.columns.find(c => c.id === h.from)?.label || h.from || '?';
+        const toLabel = state.columns.find(c => c.id === h.to)?.label || h.to || '?';
+        text.textContent = `${fromLabel} \u2192 ${toLabel}`;
       } else {
         text.textContent = h.action;
       }
@@ -1831,12 +2016,11 @@ function showCardModal(card) {
     modal.appendChild(field('History', historyList, true));
   }
 
-  modal.appendChild(footer);
-
-  // Wrap modal + attachment side panel in a flex row
+  // Wrap modal + action panel + attachment side panel in a flex row
   const wrapper = document.createElement('div');
   wrapper.className = 'modal-wrapper';
   wrapper.addEventListener('click', e => e.stopPropagation());
+  wrapper.appendChild(actionPanel);
   wrapper.appendChild(modal);
 
   if (card.attachments && card.attachments.length > 0) {
@@ -2024,6 +2208,283 @@ function resetGlassDefaults() {
       }
     }
   });
+}
+
+// ── Report Modal ──────────────────────────────────────────────────────────────
+function showReportModal() {
+  document.querySelector('.modal-backdrop')?.remove();
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) backdrop.remove(); });
+
+  const modal = document.createElement('div');
+  modal.className = 'modal report-modal';
+  modal.addEventListener('click', e => e.stopPropagation());
+
+  // ── Title ──
+  const header = document.createElement('div');
+  header.className = 'modal-header';
+  const title = document.createElement('div');
+  title.className = 'modal-title';
+  title.textContent = 'Activity Report';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'modal-close';
+  closeBtn.textContent = '×';
+  closeBtn.onclick = () => backdrop.remove();
+  header.appendChild(title);
+  header.appendChild(closeBtn);
+  modal.appendChild(header);
+
+  // ── Date range bar ──
+  const rangeBar = document.createElement('div');
+  rangeBar.className = 'report-range-bar';
+
+  const presets = [7, 14, 30];
+  presets.forEach(days => {
+    const btn = document.createElement('button');
+    btn.className = 'report-preset-btn';
+    btn.textContent = days + ' days';
+    btn.onclick = () => {
+      const end = new Date();
+      const start = new Date();
+      start.setDate(start.getDate() - days);
+      startIn.value = start.toISOString().slice(0, 10);
+      endIn.value = end.toISOString().slice(0, 10);
+      renderReport();
+    };
+    rangeBar.appendChild(btn);
+  });
+
+  const startIn = document.createElement('input');
+  startIn.type = 'date';
+  startIn.className = 'report-date-input';
+  const endIn = document.createElement('input');
+  endIn.type = 'date';
+  endIn.className = 'report-date-input';
+
+  // Default: last 7 days
+  const now = new Date();
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  startIn.value = weekAgo.toISOString().slice(0, 10);
+  endIn.value = now.toISOString().slice(0, 10);
+
+  startIn.onchange = renderReport;
+  endIn.onchange = renderReport;
+
+  const sep = document.createElement('span');
+  sep.textContent = '→';
+  sep.style.cssText = 'color:var(--text-dim);font-size:12px;';
+
+  rangeBar.appendChild(startIn);
+  rangeBar.appendChild(sep);
+  rangeBar.appendChild(endIn);
+  modal.appendChild(rangeBar);
+
+  // ── Report body ──
+  const reportBody = document.createElement('div');
+  reportBody.className = 'report-body';
+  modal.appendChild(reportBody);
+
+  // ── Copy button ──
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'btn-edit';
+  copyBtn.textContent = 'Copy Report';
+  copyBtn.style.cssText = 'align-self:flex-start;margin-top:4px;';
+  copyBtn.onclick = () => {
+    const md = generateReportMarkdown();
+    navigator.clipboard.writeText(md)
+      .then(() => showToast('Report copied to clipboard', 'success'))
+      .catch(() => showToast('Failed to copy report', 'danger'));
+  };
+  modal.appendChild(copyBtn);
+
+  // ── Helper: column ID → label ──
+  const colLabel = (id) => {
+    const col = state.columns.find(c => c.id === id);
+    return col ? col.label : id;
+  };
+
+  // ── Helper: format date ──
+  const fmtDate = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  // ── Helper: get done column ID ──
+  const doneColId = () => {
+    const col = state.columns.find(c => c.id === 'done' || (c.label || '').toLowerCase() === 'done');
+    return col ? col.id : 'done';
+  };
+
+  // ── Gather report data ──
+  function gatherData() {
+    const startDate = new Date(startIn.value + 'T00:00:00');
+    const endDate = new Date(endIn.value + 'T23:59:59');
+    const completed = [];
+    const started = [];
+    const other = [];
+    const done = doneColId();
+
+    state.cards.forEach(card => {
+      const history = card.history || [];
+      history.forEach(evt => {
+        const evtDate = new Date(evt.date);
+        if (evtDate < startDate || evtDate > endDate) return;
+
+        const from = evt.from || evt.movedFrom || '';
+        const to = evt.to || evt.movedTo || '';
+        const entry = {
+          title: card.title || 'Untitled',
+          ticketId: card.ticketId || '',
+          from,
+          to,
+          date: evt.date,
+          action: evt.action || '',
+        };
+
+        if (evt.action === 'completed' || to === done) {
+          completed.push(entry);
+        } else if (evt.action === 'reopened' || from === 'todo' || from === done) {
+          started.push(entry);
+        } else {
+          other.push(entry);
+        }
+      });
+    });
+
+    return { completed, started, other };
+  }
+
+  // ── Render report HTML ──
+  function renderReport() {
+    const { completed, started, other } = gatherData();
+    reportBody.innerHTML = '';
+
+    if (completed.length === 0 && started.length === 0 && other.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'color:var(--text-dim);font-size:12px;padding:12px 0;text-align:center;';
+      empty.textContent = 'No activity in this date range.';
+      reportBody.appendChild(empty);
+      return;
+    }
+
+    // ── Stats bar ──
+    const total = completed.length + started.length + other.length;
+    const statsBar = document.createElement('div');
+    statsBar.className = 'report-stats-bar';
+    const statKeys = ['completed', 'started', 'other', 'total'];
+    const stats = [
+      { key: 'completed', label: 'Completed', value: completed.length, cls: 'stat-completed' },
+      { key: 'started', label: 'Started', value: started.length, cls: 'stat-started' },
+      { key: 'other', label: 'Other', value: other.length, cls: 'stat-other' },
+      { key: 'total', label: 'Total', value: total, cls: 'stat-total' },
+    ];
+    stats.forEach(s => {
+      const card = document.createElement('div');
+      card.className = 'report-stat ' + s.cls;
+      card.dataset.filter = s.key;
+      card.innerHTML = `<span class="stat-value">${s.value}</span><span class="stat-label">${s.label}</span>`;
+      card.onclick = () => {
+        // Toggle: click same filter again → clear it
+        activeFilter = activeFilter === s.key ? null : s.key;
+        renderSections(completed, started, other);
+        // Update active class on stat cards
+        statsBar.querySelectorAll('.report-stat').forEach(el => {
+          el.classList.toggle('active', activeFilter === el.dataset.filter);
+        });
+      };
+      statsBar.appendChild(card);
+    });
+    reportBody.appendChild(statsBar);
+
+    renderSections(completed, started, other);
+  }
+
+  let activeFilter = null;
+
+  function renderSections(completed, started, other) {
+    // Remove existing sections (keep stats bar)
+    reportBody.querySelectorAll('.report-section-heading, .report-list').forEach(el => el.remove());
+
+    const addSection = (heading, items, formatFn) => {
+      if (items.length === 0) return;
+      const h = document.createElement('h3');
+      h.className = 'report-section-heading';
+      h.textContent = heading;
+      reportBody.appendChild(h);
+      const ul = document.createElement('ul');
+      ul.className = 'report-list';
+      items.forEach(item => {
+        const li = document.createElement('li');
+        li.innerHTML = formatFn(item);
+        ul.appendChild(li);
+      });
+      reportBody.appendChild(ul);
+    };
+
+    const show = (key) => !activeFilter || activeFilter === 'total' || activeFilter === key;
+
+    if (show('completed')) addSection('Completed', completed, e => {
+      const tid = e.ticketId ? ` <span class="report-ticket">(${e.ticketId})</span>` : '';
+      return `<strong>${e.title}</strong>${tid} — completed ${fmtDate(e.date)}`;
+    });
+
+    if (show('started')) addSection('Started', started, e => {
+      const tid = e.ticketId ? ` <span class="report-ticket">(${e.ticketId})</span>` : '';
+      return `<strong>${e.title}</strong>${tid} — moved to ${colLabel(e.to)}, ${fmtDate(e.date)}`;
+    });
+
+    if (show('other')) addSection('Other Activity', other, e => {
+      const tid = e.ticketId ? ` <span class="report-ticket">(${e.ticketId})</span>` : '';
+      return `<strong>${e.title}</strong>${tid} — ${colLabel(e.from)} → ${colLabel(e.to)}, ${fmtDate(e.date)}`;
+    });
+  }
+
+  // ── Generate plain markdown for clipboard ──
+  function generateReportMarkdown() {
+    const { completed, started, other } = gatherData();
+    let md = '';
+
+    if (completed.length > 0) {
+      md += '## Completed\n';
+      completed.forEach(e => {
+        const tid = e.ticketId ? ` (${e.ticketId})` : '';
+        md += `- **${e.title}**${tid} — completed ${fmtDate(e.date)}\n`;
+      });
+      md += '\n';
+    }
+
+    if (started.length > 0) {
+      md += '## Started\n';
+      started.forEach(e => {
+        const tid = e.ticketId ? ` (${e.ticketId})` : '';
+        md += `- **${e.title}**${tid} — moved to ${colLabel(e.to)}, ${fmtDate(e.date)}\n`;
+      });
+      md += '\n';
+    }
+
+    if (other.length > 0) {
+      md += '## Other Activity\n';
+      other.forEach(e => {
+        const tid = e.ticketId ? ` (${e.ticketId})` : '';
+        md += `- **${e.title}**${tid} — ${colLabel(e.from)} → ${colLabel(e.to)}, ${fmtDate(e.date)}\n`;
+      });
+    }
+
+    return md.trim() || 'No activity in this date range.';
+  }
+
+  // Initial render
+  renderReport();
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'modal-wrapper';
+  wrapper.addEventListener('click', e => e.stopPropagation());
+  wrapper.appendChild(modal);
+  backdrop.appendChild(wrapper);
+  document.body.appendChild(backdrop);
 }
 
 // ── Settings Modal ────────────────────────────────────────────────────────────

@@ -390,6 +390,38 @@ body.theme-glass .modal-close {
 body.theme-glass .modal-close:hover {
   color: #ef4444;
 }
+body.theme-glass .action-panel-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+}
+body.theme-glass .action-panel-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+body.theme-glass .ap-delete:hover {
+  background: rgba(255, 95, 114, 0.15);
+  border-color: rgba(255, 95, 114, 0.35);
+}
+body.theme-glass .report-preset-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+body.theme-glass .report-preset-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+body.theme-glass .report-date-input {
+  background: rgba(var(--color-primary-rgb), 0.05);
+  border-color: rgba(var(--color-primary-rgb), 0.15);
+}
+body.theme-glass .report-section-heading {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+body.theme-glass .report-stat {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(6px);
+}
 body.theme-glass .modal label {
   color: #64748b;
   font-weight: 700;
